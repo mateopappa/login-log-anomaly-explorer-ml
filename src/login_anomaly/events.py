@@ -13,11 +13,12 @@ from __future__ import annotations
 
 import ipaddress
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum
 
+from login_anomaly.validation import require_identifier, require_utc
+
 SCHEMA_VERSION = "1.0.0"
-MAX_ACCOUNT_ID_LENGTH = 64
 ALLOWED_COUNTRY_CODES: frozenset[str] = frozenset({"AR", "BR", "DE", "JP", "US"})
 
 # Only addresses from these networks may appear in events. None of them is a
@@ -33,8 +34,6 @@ SYNTHETIC_IPV4_NETWORKS: tuple[ipaddress.IPv4Network, ...] = (
     ipaddress.IPv4Network("203.0.113.0/24"),
 )
 
-_UTC_OFFSET = timedelta(0)
-
 
 class Outcome(Enum):
     SUCCESS = "success"
@@ -49,6 +48,8 @@ class AuthEvent:
     The generator, ingestion, and tests all build events through this
     constructor, which keeps a single validation rule and avoids a second,
     separate function that could drift from it.
+
+    ``event_id`` and ``account_id`` are identifiers: see ``IDENTIFIER_PATTERN``.
     """
 
     event_id: str
@@ -59,40 +60,22 @@ class AuthEvent:
     country_code: str
 
     def __post_init__(self) -> None:
-        _require_non_empty(self.event_id, "event_id")
-        _require_utc(self.timestamp_utc)
-        _require_account_id(self.account_id)
+        require_identifier(self.event_id, "event_id")
+        require_utc(self.timestamp_utc, "timestamp_utc")
+        require_identifier(self.account_id, "account_id")
         _require_synthetic_ipv4(self.source_ip)
         if not isinstance(self.outcome, Outcome):
             raise ValueError("outcome must be an Outcome member")
         _require_country_code(self.country_code)
 
 
-def _require_non_empty(value: str, name: str) -> None:
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"{name} must be a non-empty string")
-
-
-def _require_utc(timestamp: datetime) -> None:
-    if not isinstance(timestamp, datetime):
-        raise ValueError("timestamp_utc must be a datetime")
-    if timestamp.tzinfo is None or timestamp.utcoffset() != _UTC_OFFSET:
-        raise ValueError("timestamp_utc must be timezone-aware UTC")
-
-
-def _require_account_id(account_id: str) -> None:
-    _require_non_empty(account_id, "account_id")
-    if len(account_id) > MAX_ACCOUNT_ID_LENGTH:
-        raise ValueError(f"account_id longer than {MAX_ACCOUNT_ID_LENGTH} characters")
-
-
-def _require_country_code(country_code: str) -> None:
+def _require_country_code(country_code: object) -> None:
     # Check the type first: a list or dict would raise TypeError on the set lookup.
     if not isinstance(country_code, str) or country_code not in ALLOWED_COUNTRY_CODES:
         raise ValueError(f"country_code not allowed: {country_code!r}")
 
 
-def _require_synthetic_ipv4(source_ip: str) -> None:
+def _require_synthetic_ipv4(source_ip: object) -> None:
     if not isinstance(source_ip, str):
         raise ValueError("source_ip must be a string")
     try:

@@ -1,5 +1,6 @@
 import dataclasses
 import random
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -7,12 +8,25 @@ import pytest
 
 from login_anomaly.events import AuthEvent, Outcome
 from login_anomaly.simulation.config import GeneratorConfig
-from login_anomaly.simulation.generator import GeneratedDataset, generate
+from login_anomaly.simulation.generator import (
+    EventDataset,
+    GeneratedDataset,
+    generate,
+    generate_with_truth,
+)
 from login_anomaly.simulation.ground_truth import ScenarioType
 from login_anomaly.simulation.manifest import DatasetManifest, build_manifest
 
 UTC = timezone.utc
 START = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+
+
+@pytest.fixture
+def restore_global_random() -> Iterator[None]:
+    # Tests that seed the global RNG must not leak that state into other tests.
+    state = random.getstate()
+    yield
+    random.setstate(state)
 
 
 def make_config(**overrides: Any) -> GeneratorConfig:
@@ -32,9 +46,28 @@ def universe(config: GeneratorConfig) -> set[str]:
     return {f"acct-{i:0{width}d}" for i in range(1, config.n_accounts + 1)}
 
 
-def test_generate_returns_dataset_with_exact_fields() -> None:
+def test_generate_returns_event_dataset_with_exact_fields() -> None:
+    names = {f.name for f in dataclasses.fields(EventDataset)}
+    assert names == {"events", "manifest"}
+
+
+def test_generate_does_not_expose_ground_truth() -> None:
+    dataset = generate(make_config())
+    assert not hasattr(dataset, "ground_truth")
+    assert isinstance(dataset, EventDataset)
+
+
+def test_generate_with_truth_returns_dataset_with_exact_fields() -> None:
     names = {f.name for f in dataclasses.fields(GeneratedDataset)}
-    assert names == {"events", "ground_truth", "manifest"}
+    assert names == {"events", "ground_truth", "manifest", "decoy_kinds"}
+
+
+def test_generate_and_generate_with_truth_produce_identical_events_and_manifest() -> None:
+    config = make_config(n_events=300)
+    events_only = generate(config)
+    with_truth = generate_with_truth(config)
+    assert events_only.events == with_truth.events
+    assert events_only.manifest == with_truth.manifest
 
 
 @pytest.mark.parametrize(
@@ -53,6 +86,14 @@ def test_timestamps_are_utc_and_inside_configured_window() -> None:
     for event in generate(config).events:
         assert event.timestamp_utc.utcoffset() == timedelta(0)
         assert config.start_utc <= event.timestamp_utc < end
+
+
+def test_timestamps_spread_across_the_configured_window() -> None:
+    # A generator that always emits start_utc, or only the first minutes of the window, must fail here.
+    config = make_config(duration_hours=6, n_events=400)
+    timestamps = [event.timestamp_utc for event in generate(config).events]
+    assert max(timestamps) - min(timestamps) > timedelta(hours=5)
+    assert min(timestamps) < config.start_utc + timedelta(minutes=30)
 
 
 def test_event_ids_are_unique() -> None:
@@ -84,13 +125,17 @@ def test_each_account_keeps_one_source_ip_and_one_country() -> None:
     assert all(len(values) == 1 for values in countries.values())
 
 
-def test_outcomes_are_valid_enum_members() -> None:
-    events = generate(make_config(n_events=300)).events
-    assert {event.outcome for event in events} <= set(Outcome)
+def test_benign_outcomes_are_mostly_success_and_both_values_occur() -> None:
+    # A generator that always fails, or always succeeds, must fail this test.
+    events = generate(make_config(n_events=2000)).events
+    outcomes = {event.outcome for event in events}
+    assert outcomes == set(Outcome)
+    success_fraction = sum(event.outcome is Outcome.SUCCESS for event in events) / len(events)
+    assert 0.90 <= success_fraction <= 0.99
 
 
 def test_every_event_is_benign_and_not_malicious() -> None:
-    dataset = generate(make_config(n_events=300))
+    dataset = generate_with_truth(make_config(n_events=300))
     for event in dataset.events:
         label = dataset.ground_truth.label_for(event.event_id)
         assert label.scenario_type is ScenarioType.BENIGN
@@ -99,7 +144,7 @@ def test_every_event_is_benign_and_not_malicious() -> None:
 
 
 def test_ground_truth_covers_exactly_the_generated_events() -> None:
-    dataset = generate(make_config(n_events=250))
+    dataset = generate_with_truth(make_config(n_events=250))
     assert len(dataset.ground_truth) == len(dataset.events)
     for event in dataset.events:
         assert event.event_id in dataset.ground_truth
@@ -129,7 +174,7 @@ def test_single_account_universe_uses_that_account_for_every_event() -> None:
     assert {event.account_id for event in dataset.events} == {"acct-1"}
 
 
-def test_generate_does_not_touch_the_global_random_state() -> None:
+def test_generate_does_not_touch_the_global_random_state(restore_global_random: None) -> None:
     random.seed(999)
     before = random.getstate()
     generate(make_config(n_events=100))

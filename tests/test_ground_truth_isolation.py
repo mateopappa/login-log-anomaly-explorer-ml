@@ -18,6 +18,11 @@ import login_anomaly
 
 PACKAGE_ROOT = Path(login_anomaly.__file__).parent
 FORBIDDEN = "login_anomaly.simulation.ground_truth"
+# The generator module also carries the ground-truth API. Its evaluation-only
+# entry point and its truth-bearing type must stay out of detection and investigation code.
+FORBIDDEN_NAMES = frozenset(
+    f"login_anomaly.simulation.generator.{name}" for name in ("generate_with_truth", "GeneratedDataset")
+)
 # Only these subpackages may import ground truth. "evaluation" is reserved for
 # later blocks and does not exist yet.
 ALLOWED_SUBPACKAGES = frozenset({"simulation", "evaluation"})
@@ -70,7 +75,9 @@ def scan_package(package_root: Path) -> list[Violation]:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         reported_lines: set[int] = set()
         for lineno, name in _imported_names(tree, package):
-            is_forbidden = name == FORBIDDEN or name.startswith(FORBIDDEN + ".")
+            is_forbidden = (
+                name == FORBIDDEN or name.startswith(FORBIDDEN + ".") or name in FORBIDDEN_NAMES
+            )
             # One statement such as `from x import y` yields several candidate
             # names; report it once.
             if is_forbidden and lineno not in reported_lines:
@@ -109,6 +116,32 @@ def test_scanner_detects_forbidden_import_forms(tmp_path: Path, source: str) -> 
     assert len(violations) == 1
     assert violations[0].file == "detectors/rules.py"
     assert violations[0].imported.startswith(FORBIDDEN)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from login_anomaly.simulation.generator import generate_with_truth\n",
+        "from login_anomaly.simulation.generator import GeneratedDataset\n",
+    ],
+    ids=["truth-function", "truth-type"],
+)
+def test_scanner_detects_truth_api_of_generator(tmp_path: Path, source: str) -> None:
+    package_root = _write_package(tmp_path, "detectors/rules.py", source)
+    violations = scan_package(package_root)
+    assert len(violations) == 1
+    assert violations[0].imported.startswith("login_anomaly.simulation.generator.")
+
+
+def test_scanner_allows_generate_and_module_import(tmp_path: Path) -> None:
+    # Control: the public event-only API and the module itself are not the forbidden names.
+    package_root = _write_package(
+        tmp_path,
+        "detectors/rules.py",
+        "from login_anomaly.simulation.generator import generate\n"
+        "from login_anomaly.simulation import generator\n",
+    )
+    assert scan_package(package_root) == []
 
 
 def test_scanner_ignores_forbidden_import_inside_simulation(tmp_path: Path) -> None:
