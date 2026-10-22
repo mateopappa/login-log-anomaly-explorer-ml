@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import pytest
 
 from login_anomaly.events import SCHEMA_VERSION
-from login_anomaly.simulation.config import GeneratorConfig
+from login_anomaly.simulation.config import MAX_SEED, GeneratorConfig
 from login_anomaly.simulation.manifest import (
     GENERATOR_VERSION,
     DatasetManifest,
@@ -78,7 +78,7 @@ def test_hash_changes_when_any_field_changes(changed: dict[str, object]) -> None
 
 def test_manifest_field_names_are_exact() -> None:
     names = {f.name for f in dataclasses.fields(DatasetManifest)}
-    assert names == {"seed", "schema_version", "generator_version", "config_sha256"}
+    assert names == {"seed", "schema_version", "generator_version", "config_sha256", "scenario_plan_sha256"}
 
 
 def test_manifest_is_frozen() -> None:
@@ -98,12 +98,13 @@ def test_build_manifest_records_provenance() -> None:
 
 
 def test_generator_version_is_set() -> None:
-    assert GENERATOR_VERSION == "0.1.0"
+    # 0.2.0 added scenario plans and records the plan in the manifest. Benign output is unchanged.
+    assert GENERATOR_VERSION == "0.2.0"
 
 
 @pytest.mark.parametrize("digest", ["abc", "A" * 64, "g" * 64, "a" * 63])
 def test_manifest_rejects_malformed_config_sha256(digest: str) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="config_sha256"):
         DatasetManifest(
             seed=42,
             schema_version="1.0.0",
@@ -113,10 +114,27 @@ def test_manifest_rejects_malformed_config_sha256(digest: str) -> None:
 
 
 def test_manifest_rejects_empty_generator_version() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="generator_version"):
         DatasetManifest(
             seed=42,
             schema_version="1.0.0",
             generator_version="",
             config_sha256="a" * 64,
         )
+
+
+@pytest.mark.parametrize("seed", [-5, MAX_SEED + 1])
+def test_manifest_rejects_seed_outside_configuration_range(seed: int) -> None:
+    # The manifest must accept exactly the seeds GeneratorConfig accepts.
+    with pytest.raises(ValueError, match="seed"):
+        DatasetManifest(seed=seed, schema_version="1.0.0", generator_version="0.1.0", config_sha256="a" * 64)
+
+
+def test_manifest_rejects_bool_seed() -> None:
+    with pytest.raises(ValueError, match="seed must be an int"):
+        DatasetManifest(seed=True, schema_version="1.0.0", generator_version="0.1.0", config_sha256="a" * 64)
+
+
+def test_manifest_accepts_seed_bounds() -> None:
+    for seed in (0, MAX_SEED):
+        DatasetManifest(seed=seed, schema_version="1.0.0", generator_version="0.1.0", config_sha256="a" * 64)

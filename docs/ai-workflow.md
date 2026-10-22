@@ -97,17 +97,23 @@ in environment variables. `.env` files are git-ignored.
 
 ## Hooks: deferred
 
-No hooks are configured. A hook would run a check after each edit, but the
-project has no configured test, lint, or type-check command yet, so there is
-nothing deterministic to run. Add a `PostToolUse` hook only once a fast local
-check exists, and keep it cheap: no LLM calls and no broad commands.
+No hooks are configured. pytest is available, but a full run takes several
+seconds because it includes the experiment tests, which is too slow for a
+`PostToolUse` hook. Add a hook only for a fast, targeted check, and keep it
+cheap: no LLM calls and no broad commands.
 
 ## Third-party skills and tools
 
-None are installed. This setup relies only on the built-in Claude Code features
-and the project skills above. Before adding any third-party skill, check its
-source, license, requested permissions, and the code it runs, then ask for
-approval.
+One third-party skill is adopted: `tdd`, a local copy of `mattpocock/skills`
+(MIT), pinned to commit `5beb35b` in its header and changed for this project
+(`disable-model-invocation: true` added). No skill is installed from a registry.
+Caveman and Junior to Senior were evaluated and not installed. Before adding any
+third-party skill, check its source, license, requested permissions, and the
+code it runs, then ask for approval.
+
+Python dependencies are declared in `pyproject.toml`: `pytest` (dev), `scikit-learn`
+(extra `ml`, for the baseline), and `streamlit` (extra `dashboard`, for the app).
+The generator and the rule detector need no third-party runtime package.
 
 ## Verifying a task
 
@@ -127,11 +133,9 @@ approval.
 
 ## Open items
 
-- `CLAUDE.md` lives at the project root and is not yet committed. Commit it
-  with the project when you are ready.
-- No test runner, linter, or type checker is configured yet, so `/verify` will
-  report `NOT CONFIGURED` for every check. Adding them is the first task for
-  `/plan-feature`.
-- The first workflow for the synthetic event generator: `/plan-feature` for the
-  generator's interface and seed handling, then `/implement-task` for one
-  module with its tests, then `/verify` and `/review`.
+- Tests: pytest is configured (`pyproject.toml`) and runs in CI
+  (`.github/workflows/ci.yml`). Lint, type checking, and formatting are not
+  configured, so `/verify` reports those as `NOT CONFIGURED` and its verdict is
+  `INCOMPLETE`, not `VERIFIED`.
+- Agentic Evaluators are designed in `docs/agentic-evaluators.md`. The
+  investigator is not implemented, so no skill or command runs one.

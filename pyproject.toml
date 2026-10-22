@@ -11,6 +11,11 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+# ml: the supervised baseline (Phase D). Kept optional so the generator and the rule
+# detector install with no third-party runtime dependencies.
+ml = ["scikit-learn>=1.4"]
+# dashboard: the local Streamlit app only. Business logic does not depend on it.
+dashboard = ["streamlit>=1.36"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

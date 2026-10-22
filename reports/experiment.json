@@ -1,0 +1,953 @@
+{
+  "config": {
+    "duration_hours": 72,
+    "model": "RandomForestClassifier (sklearn), class_weight=balanced",
+    "model_seed": 7,
+    "n_accounts": 200,
+    "n_events_per_dataset": 3000,
+    "train_plan": {
+      "benign_decoys": 0,
+      "benign_travelers": 5,
+      "bruteforce_campaigns": 3,
+      "impossible_travel_campaigns": 3,
+      "password_spraying_campaigns": 2
+    },
+    "train_seeds": [
+      101,
+      102,
+      103,
+      104
+    ]
+  },
+  "evaluation_sets": [
+    {
+      "alerts_without_malicious_events_by_rule_and_decoy": {},
+      "case_investigation": {
+        "budget_exhausted": 0,
+        "cases": 34,
+        "correct": 17,
+        "inconclusive": 17,
+        "incorrect": 0,
+        "tool_errors": 0,
+        "unsupported_evidence": 0
+      },
+      "datasets": [
+        {
+          "campaigns": 8,
+          "class_distribution": {
+            "0": 2854,
+            "1": 146
+          },
+          "events": 3000,
+          "malicious_events": 146,
+          "seed": 201,
+          "workflow": {
+            "case_investigation": {
+              "budget_exhausted": 0,
+              "cases": 16,
+              "correct": 8,
+              "inconclusive": 8,
+              "incorrect": 0,
+              "tool_errors": 0,
+              "unsupported_evidence": 0
+            },
+            "cases": {
+              "execution_mode": "mock",
+              "ml_only": 8,
+              "rule_backed": 8
+            },
+            "dataset_id": "dataset-a5498bd6029937e06f8b5a6a",
+            "detectors": {
+              "ml": {
+                "confusion": {
+                  "fn": 0,
+                  "fp": 3,
+                  "tn": 2851,
+                  "tp": 146
+                },
+                "f1": 0.9898,
+                "flagged_events": 149,
+                "precision": 0.9799,
+                "recall": 1.0
+              },
+              "rules": {
+                "confusion": {
+                  "fn": 5,
+                  "fp": 3,
+                  "tn": 2851,
+                  "tp": 141
+                },
+                "f1": 0.9724,
+                "flagged_events": 144,
+                "precision": 0.9792,
+                "recall": 0.9658
+              }
+            },
+            "investigation": {
+              "alerts": 8,
+              "correct": 8,
+              "failed": 0,
+              "failed_tool_calls": 0,
+              "forbidden_access_attempts": 0,
+              "inconclusive": 0,
+              "incorrect": 0,
+              "investigated": 8,
+              "irrelevant_evidence": 0,
+              "tool_limit_violations": 0,
+              "unsupported_evidence": 0
+            },
+            "ml_positive_events": 149,
+            "rule_alerts": 8
+          }
+        },
+        {
+          "campaigns": 8,
+          "class_distribution": {
+            "0": 2895,
+            "1": 105
+          },
+          "events": 3000,
+          "malicious_events": 105,
+          "seed": 202,
+          "workflow": {
+            "case_investigation": {
+              "budget_exhausted": 0,
+              "cases": 18,
+              "correct": 9,
+              "inconclusive": 9,
+              "incorrect": 0,
+              "tool_errors": 0,
+              "unsupported_evidence": 0
+            },
+            "cases": {
+              "execution_mode": "mock",
+              "ml_only": 9,
+              "rule_backed": 9
+            },
+            "dataset_id": "dataset-0596d33fea5185249bea5502",
+            "detectors": {
+              "ml": {
+                "confusion": {
+                  "fn": 0,
+                  "fp": 2,
+                  "tn": 2893,
+                  "tp": 105
+                },
+                "f1": 0.9906,
+                "flagged_events": 107,
+                "precision": 0.9813,
+                "recall": 1.0
+              },
+              "rules": {
+                "confusion": {
+                  "fn": 6,
+                  "fp": 4,
+                  "tn": 2891,
+                  "tp": 99
+                },
+                "f1": 0.9519,
+                "flagged_events": 103,
+                "precision": 0.9612,
+                "recall": 0.9429
+              }
+            },
+            "investigation": {
+              "alerts": 9,
+              "correct": 9,
+              "failed": 0,
+              "failed_tool_calls": 0,
+              "forbidden_access_attempts": 0,
+              "inconclusive": 0,
+              "incorrect": 0,
+              "investigated": 9,
+              "irrelevant_evidence": 0,
+              "tool_limit_violations": 0,
+              "unsupported_evidence": 0
+            },
+            "ml_positive_events": 107,
+            "rule_alerts": 9
+          }
+        }
+      ],
+      "description": "Same specification as the rule thresholds. Optimistic by construction; kept as a control.",
+      "investigation": {
+        "alerts": 17,
+        "correct": 17,
+        "failed": 0,
+        "failed_tool_calls": 0,
+        "forbidden_access_attempts": 0,
+        "inconclusive": 0,
+        "incorrect": 0,
+        "investigated": 17,
+        "irrelevant_evidence": 0,
+        "tool_limit_violations": 0,
+        "unsupported_evidence": 0
+      },
+      "methods": [
+        {
+          "confusion": {
+            "fn": 251,
+            "fp": 0,
+            "tn": 5749,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "f1_max": 0.0,
+          "f1_mean": 0.0,
+          "f1_min": 0.0,
+          "f1_per_seed": [
+            0.0,
+            0.0
+          ],
+          "false_positive_rate": 0.0,
+          "flagged_events": 0,
+          "method": "all_benign",
+          "precision": 0.0,
+          "recall": 0.0,
+          "recall_by_scenario": {
+            "bruteforce": 0.0,
+            "impossible_travel": 0.0,
+            "password_spraying": 0.0
+          }
+        },
+        {
+          "confusion": {
+            "fn": 11,
+            "fp": 7,
+            "tn": 5742,
+            "tp": 240
+          },
+          "f1": 0.9639,
+          "f1_max": 0.9724,
+          "f1_mean": 0.9622,
+          "f1_min": 0.9519,
+          "f1_per_seed": [
+            0.9724,
+            0.9519
+          ],
+          "false_positive_rate": 0.0012,
+          "flagged_events": 247,
+          "method": "rules",
+          "precision": 0.9717,
+          "recall": 0.9562,
+          "recall_by_scenario": {
+            "bruteforce": 0.9732,
+            "impossible_travel": 1.0,
+            "password_spraying": 0.9271
+          }
+        },
+        {
+          "confusion": {
+            "fn": 0,
+            "fp": 5,
+            "tn": 5744,
+            "tp": 251
+          },
+          "f1": 0.9901,
+          "f1_max": 0.9906,
+          "f1_mean": 0.9902,
+          "f1_min": 0.9898,
+          "f1_per_seed": [
+            0.9898,
+            0.9906
+          ],
+          "false_positive_rate": 0.0009,
+          "flagged_events": 256,
+          "method": "ml",
+          "precision": 0.9805,
+          "recall": 1.0,
+          "recall_by_scenario": {
+            "bruteforce": 1.0,
+            "impossible_travel": 1.0,
+            "password_spraying": 1.0
+          }
+        }
+      ],
+      "name": "nominal",
+      "plan": {
+        "benign_decoys": 0,
+        "benign_travelers": 5,
+        "bruteforce_campaigns": 3,
+        "impossible_travel_campaigns": 3,
+        "password_spraying_campaigns": 2
+      },
+      "ranges": {
+        "bruteforce_failures": [
+          15,
+          40
+        ],
+        "bruteforce_window_seconds": 600,
+        "spraying_accounts": [
+          10,
+          25
+        ],
+        "spraying_attempts_per_account": [
+          1,
+          2
+        ],
+        "spraying_window_seconds": [
+          3600,
+          7200
+        ],
+        "travel_gap_seconds": [
+          300,
+          3600
+        ]
+      },
+      "ranges_are_nominal": true,
+      "seeds": [
+        201,
+        202
+      ]
+    },
+    {
+      "alerts_without_malicious_events_by_rule_and_decoy": {
+        "impossible_travel/roaming": 2,
+        "password_spraying/shared_nat": 4
+      },
+      "case_investigation": {
+        "budget_exhausted": 0,
+        "cases": 54,
+        "correct": 16,
+        "inconclusive": 32,
+        "incorrect": 6,
+        "tool_errors": 0,
+        "unsupported_evidence": 0
+      },
+      "datasets": [
+        {
+          "campaigns": 8,
+          "class_distribution": {
+            "0": 2834,
+            "1": 166
+          },
+          "events": 3000,
+          "malicious_events": 166,
+          "seed": 211,
+          "workflow": {
+            "case_investigation": {
+              "budget_exhausted": 0,
+              "cases": 27,
+              "correct": 8,
+              "inconclusive": 16,
+              "incorrect": 3,
+              "tool_errors": 0,
+              "unsupported_evidence": 0
+            },
+            "cases": {
+              "execution_mode": "mock",
+              "ml_only": 16,
+              "rule_backed": 11
+            },
+            "dataset_id": "dataset-923bfdd98b51eb438ca75211",
+            "detectors": {
+              "ml": {
+                "confusion": {
+                  "fn": 2,
+                  "fp": 80,
+                  "tn": 2754,
+                  "tp": 164
+                },
+                "f1": 0.8,
+                "flagged_events": 244,
+                "precision": 0.6721,
+                "recall": 0.988
+              },
+              "rules": {
+                "confusion": {
+                  "fn": 3,
+                  "fp": 73,
+                  "tn": 2761,
+                  "tp": 163
+                },
+                "f1": 0.8109,
+                "flagged_events": 236,
+                "precision": 0.6907,
+                "recall": 0.9819
+              }
+            },
+            "investigation": {
+              "alerts": 11,
+              "correct": 8,
+              "failed": 0,
+              "failed_tool_calls": 0,
+              "forbidden_access_attempts": 0,
+              "inconclusive": 0,
+              "incorrect": 3,
+              "investigated": 11,
+              "irrelevant_evidence": 0,
+              "tool_limit_violations": 0,
+              "unsupported_evidence": 0
+            },
+            "ml_positive_events": 244,
+            "rule_alerts": 11
+          }
+        },
+        {
+          "campaigns": 8,
+          "class_distribution": {
+            "0": 2892,
+            "1": 108
+          },
+          "events": 3000,
+          "malicious_events": 108,
+          "seed": 212,
+          "workflow": {
+            "case_investigation": {
+              "budget_exhausted": 0,
+              "cases": 27,
+              "correct": 8,
+              "inconclusive": 16,
+              "incorrect": 3,
+              "tool_errors": 0,
+              "unsupported_evidence": 0
+            },
+            "cases": {
+              "execution_mode": "mock",
+              "ml_only": 16,
+              "rule_backed": 11
+            },
+            "dataset_id": "dataset-648bde918cce7b19a2807ddd",
+            "detectors": {
+              "ml": {
+                "confusion": {
+                  "fn": 1,
+                  "fp": 72,
+                  "tn": 2820,
+                  "tp": 107
+                },
+                "f1": 0.7456,
+                "flagged_events": 179,
+                "precision": 0.5978,
+                "recall": 0.9907
+              },
+              "rules": {
+                "confusion": {
+                  "fn": 2,
+                  "fp": 63,
+                  "tn": 2829,
+                  "tp": 106
+                },
+                "f1": 0.7653,
+                "flagged_events": 169,
+                "precision": 0.6272,
+                "recall": 0.9815
+              }
+            },
+            "investigation": {
+              "alerts": 11,
+              "correct": 8,
+              "failed": 0,
+              "failed_tool_calls": 0,
+              "forbidden_access_attempts": 0,
+              "inconclusive": 0,
+              "incorrect": 3,
+              "investigated": 11,
+              "irrelevant_evidence": 0,
+              "tool_limit_violations": 0,
+              "unsupported_evidence": 0
+            },
+            "ml_positive_events": 179,
+            "rule_alerts": 11
+          }
+        }
+      ],
+      "description": "Nominal campaigns plus benign decoys that partly resemble attacks.",
+      "investigation": {
+        "alerts": 22,
+        "correct": 16,
+        "failed": 0,
+        "failed_tool_calls": 0,
+        "forbidden_access_attempts": 0,
+        "inconclusive": 0,
+        "incorrect": 6,
+        "investigated": 22,
+        "irrelevant_evidence": 0,
+        "tool_limit_violations": 0,
+        "unsupported_evidence": 0
+      },
+      "methods": [
+        {
+          "confusion": {
+            "fn": 274,
+            "fp": 0,
+            "tn": 5726,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "f1_max": 0.0,
+          "f1_mean": 0.0,
+          "f1_min": 0.0,
+          "f1_per_seed": [
+            0.0,
+            0.0
+          ],
+          "false_positive_rate": 0.0,
+          "flagged_events": 0,
+          "method": "all_benign",
+          "precision": 0.0,
+          "recall": 0.0,
+          "recall_by_scenario": {
+            "bruteforce": 0.0,
+            "impossible_travel": 0.0,
+            "password_spraying": 0.0
+          }
+        },
+        {
+          "confusion": {
+            "fn": 5,
+            "fp": 136,
+            "tn": 5590,
+            "tp": 269
+          },
+          "f1": 0.7923,
+          "f1_max": 0.8109,
+          "f1_mean": 0.7881,
+          "f1_min": 0.7653,
+          "f1_per_seed": [
+            0.8109,
+            0.7653
+          ],
+          "false_positive_rate": 0.0238,
+          "flagged_events": 405,
+          "method": "rules",
+          "precision": 0.6642,
+          "recall": 0.9818,
+          "recall_by_scenario": {
+            "bruteforce": 0.994,
+            "impossible_travel": 1.0,
+            "password_spraying": 0.9604
+          }
+        },
+        {
+          "confusion": {
+            "fn": 3,
+            "fp": 152,
+            "tn": 5574,
+            "tp": 271
+          },
+          "f1": 0.7776,
+          "f1_max": 0.8,
+          "f1_mean": 0.7728,
+          "f1_min": 0.7456,
+          "f1_per_seed": [
+            0.8,
+            0.7456
+          ],
+          "false_positive_rate": 0.0265,
+          "flagged_events": 423,
+          "method": "ml",
+          "precision": 0.6407,
+          "recall": 0.9891,
+          "recall_by_scenario": {
+            "bruteforce": 0.988,
+            "impossible_travel": 1.0,
+            "password_spraying": 0.9901
+          }
+        }
+      ],
+      "name": "nominal_with_decoys",
+      "plan": {
+        "benign_decoys": 6,
+        "benign_travelers": 5,
+        "bruteforce_campaigns": 3,
+        "impossible_travel_campaigns": 3,
+        "password_spraying_campaigns": 2
+      },
+      "ranges": {
+        "bruteforce_failures": [
+          15,
+          40
+        ],
+        "bruteforce_window_seconds": 600,
+        "spraying_accounts": [
+          10,
+          25
+        ],
+        "spraying_attempts_per_account": [
+          1,
+          2
+        ],
+        "spraying_window_seconds": [
+          3600,
+          7200
+        ],
+        "travel_gap_seconds": [
+          300,
+          3600
+        ]
+      },
+      "ranges_are_nominal": true,
+      "seeds": [
+        211,
+        212
+      ]
+    },
+    {
+      "alerts_without_malicious_events_by_rule_and_decoy": {
+        "impossible_travel/roaming": 3,
+        "password_spraying/shared_nat": 6
+      },
+      "case_investigation": {
+        "budget_exhausted": 0,
+        "cases": 265,
+        "correct": 3,
+        "inconclusive": 253,
+        "incorrect": 9,
+        "tool_errors": 0,
+        "unsupported_evidence": 0
+      },
+      "datasets": [
+        {
+          "campaigns": 8,
+          "class_distribution": {
+            "0": 2931,
+            "1": 69
+          },
+          "events": 3000,
+          "malicious_events": 69,
+          "seed": 301,
+          "workflow": {
+            "case_investigation": {
+              "budget_exhausted": 0,
+              "cases": 82,
+              "correct": 1,
+              "inconclusive": 78,
+              "incorrect": 3,
+              "tool_errors": 0,
+              "unsupported_evidence": 0
+            },
+            "cases": {
+              "execution_mode": "mock",
+              "ml_only": 78,
+              "rule_backed": 4
+            },
+            "dataset_id": "dataset-3e0f40662c89b3686ca732a3",
+            "detectors": {
+              "ml": {
+                "confusion": {
+                  "fn": 0,
+                  "fp": 60,
+                  "tn": 2871,
+                  "tp": 69
+                },
+                "f1": 0.697,
+                "flagged_events": 129,
+                "precision": 0.5349,
+                "recall": 1.0
+              },
+              "rules": {
+                "confusion": {
+                  "fn": 68,
+                  "fp": 54,
+                  "tn": 2877,
+                  "tp": 1
+                },
+                "f1": 0.0161,
+                "flagged_events": 55,
+                "precision": 0.0182,
+                "recall": 0.0145
+              }
+            },
+            "investigation": {
+              "alerts": 4,
+              "correct": 1,
+              "failed": 0,
+              "failed_tool_calls": 0,
+              "forbidden_access_attempts": 0,
+              "inconclusive": 0,
+              "incorrect": 3,
+              "investigated": 4,
+              "irrelevant_evidence": 0,
+              "tool_limit_violations": 0,
+              "unsupported_evidence": 0
+            },
+            "ml_positive_events": 129,
+            "rule_alerts": 4
+          }
+        },
+        {
+          "campaigns": 8,
+          "class_distribution": {
+            "0": 2924,
+            "1": 76
+          },
+          "events": 3000,
+          "malicious_events": 76,
+          "seed": 302,
+          "workflow": {
+            "case_investigation": {
+              "budget_exhausted": 0,
+              "cases": 89,
+              "correct": 0,
+              "inconclusive": 86,
+              "incorrect": 3,
+              "tool_errors": 0,
+              "unsupported_evidence": 0
+            },
+            "cases": {
+              "execution_mode": "mock",
+              "ml_only": 86,
+              "rule_backed": 3
+            },
+            "dataset_id": "dataset-5f271d6b1330cc10969851ec",
+            "detectors": {
+              "ml": {
+                "confusion": {
+                  "fn": 0,
+                  "fp": 81,
+                  "tn": 2843,
+                  "tp": 76
+                },
+                "f1": 0.6524,
+                "flagged_events": 157,
+                "precision": 0.4841,
+                "recall": 1.0
+              },
+              "rules": {
+                "confusion": {
+                  "fn": 76,
+                  "fp": 73,
+                  "tn": 2851,
+                  "tp": 0
+                },
+                "f1": 0.0,
+                "flagged_events": 73,
+                "precision": 0.0,
+                "recall": 0.0
+              }
+            },
+            "investigation": {
+              "alerts": 3,
+              "correct": 0,
+              "failed": 0,
+              "failed_tool_calls": 0,
+              "forbidden_access_attempts": 0,
+              "inconclusive": 0,
+              "incorrect": 3,
+              "investigated": 3,
+              "irrelevant_evidence": 0,
+              "tool_limit_violations": 0,
+              "unsupported_evidence": 0
+            },
+            "ml_positive_events": 157,
+            "rule_alerts": 3
+          }
+        },
+        {
+          "campaigns": 8,
+          "class_distribution": {
+            "0": 2916,
+            "1": 84
+          },
+          "events": 3000,
+          "malicious_events": 84,
+          "seed": 303,
+          "workflow": {
+            "case_investigation": {
+              "budget_exhausted": 0,
+              "cases": 94,
+              "correct": 2,
+              "inconclusive": 89,
+              "incorrect": 3,
+              "tool_errors": 0,
+              "unsupported_evidence": 0
+            },
+            "cases": {
+              "execution_mode": "mock",
+              "ml_only": 89,
+              "rule_backed": 5
+            },
+            "dataset_id": "dataset-e8dd167c8578bcc1ad35f22c",
+            "detectors": {
+              "ml": {
+                "confusion": {
+                  "fn": 0,
+                  "fp": 60,
+                  "tn": 2856,
+                  "tp": 84
+                },
+                "f1": 0.7368,
+                "flagged_events": 144,
+                "precision": 0.5833,
+                "recall": 1.0
+              },
+              "rules": {
+                "confusion": {
+                  "fn": 82,
+                  "fp": 57,
+                  "tn": 2859,
+                  "tp": 2
+                },
+                "f1": 0.028,
+                "flagged_events": 59,
+                "precision": 0.0339,
+                "recall": 0.0238
+              }
+            },
+            "investigation": {
+              "alerts": 5,
+              "correct": 2,
+              "failed": 0,
+              "failed_tool_calls": 0,
+              "forbidden_access_attempts": 0,
+              "inconclusive": 0,
+              "incorrect": 3,
+              "investigated": 5,
+              "irrelevant_evidence": 0,
+              "tool_limit_violations": 0,
+              "unsupported_evidence": 0
+            },
+            "ml_positive_events": 144,
+            "rule_alerts": 5
+          }
+        }
+      ],
+      "description": "BOUNDARY STRESS TEST. Campaign settings sit deliberately just outside the rule thresholds (14 failures, 9 accounts, 61+ minute gaps). It measures how fast rules fail at their edge. It is not evidence of generalization to real attacker behaviour, and it favours the ML baseline by construction.",
+      "investigation": {
+        "alerts": 12,
+        "correct": 3,
+        "failed": 0,
+        "failed_tool_calls": 0,
+        "forbidden_access_attempts": 0,
+        "inconclusive": 0,
+        "incorrect": 9,
+        "investigated": 12,
+        "irrelevant_evidence": 0,
+        "tool_limit_violations": 0,
+        "unsupported_evidence": 0
+      },
+      "methods": [
+        {
+          "confusion": {
+            "fn": 229,
+            "fp": 0,
+            "tn": 8771,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "f1_max": 0.0,
+          "f1_mean": 0.0,
+          "f1_min": 0.0,
+          "f1_per_seed": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "false_positive_rate": 0.0,
+          "flagged_events": 0,
+          "method": "all_benign",
+          "precision": 0.0,
+          "recall": 0.0,
+          "recall_by_scenario": {
+            "bruteforce": 0.0,
+            "impossible_travel": 0.0,
+            "password_spraying": 0.0
+          }
+        },
+        {
+          "confusion": {
+            "fn": 226,
+            "fp": 184,
+            "tn": 8587,
+            "tp": 3
+          },
+          "f1": 0.0144,
+          "f1_max": 0.028,
+          "f1_mean": 0.0147,
+          "f1_min": 0.0,
+          "f1_per_seed": [
+            0.0161,
+            0.0,
+            0.028
+          ],
+          "false_positive_rate": 0.021,
+          "flagged_events": 187,
+          "method": "rules",
+          "precision": 0.016,
+          "recall": 0.0131,
+          "recall_by_scenario": {
+            "bruteforce": 0.0,
+            "impossible_travel": 0.3333,
+            "password_spraying": 0.0
+          }
+        },
+        {
+          "confusion": {
+            "fn": 0,
+            "fp": 201,
+            "tn": 8570,
+            "tp": 229
+          },
+          "f1": 0.695,
+          "f1_max": 0.7368,
+          "f1_mean": 0.6954,
+          "f1_min": 0.6524,
+          "f1_per_seed": [
+            0.697,
+            0.6524,
+            0.7368
+          ],
+          "false_positive_rate": 0.0229,
+          "flagged_events": 430,
+          "method": "ml",
+          "precision": 0.5326,
+          "recall": 1.0,
+          "recall_by_scenario": {
+            "bruteforce": 1.0,
+            "impossible_travel": 1.0,
+            "password_spraying": 1.0
+          }
+        }
+      ],
+      "name": "boundary_stress_with_decoys",
+      "plan": {
+        "benign_decoys": 6,
+        "benign_travelers": 5,
+        "bruteforce_campaigns": 3,
+        "impossible_travel_campaigns": 3,
+        "password_spraying_campaigns": 2
+      },
+      "ranges": {
+        "bruteforce_failures": [
+          8,
+          14
+        ],
+        "bruteforce_window_seconds": 1500,
+        "spraying_accounts": [
+          5,
+          9
+        ],
+        "spraying_attempts_per_account": [
+          2,
+          3
+        ],
+        "spraying_window_seconds": [
+          10800,
+          14400
+        ],
+        "travel_gap_seconds": [
+          3660,
+          10800
+        ]
+      },
+      "ranges_are_nominal": false,
+      "seeds": [
+        301,
+        302,
+        303
+      ]
+    }
+  ],
+  "limitations": [
+    "Synthetic data only. These numbers do not estimate performance on real logs.",
+    "The nominal set shares its thresholds with the rule detector, so its rule results are optimistic by construction.",
+    "The boundary_stress set is a single boundary test. Its ranges sit next to the rule thresholds by design, so the rule collapse it shows follows from that design. It is not a measure of generalization.",
+    "The ML model is trained only on the nominal specification without decoys, so the stress set measures sensitivity, not transfer to a new real distribution.",
+    "Few campaigns per dataset, so one campaign moves recall noticeably. Use the per-seed spread, not a single number.",
+    "Benign background traffic has no diurnal, session, or device structure.",
+    "Decoys are assumed, not observed: their kinds and ranges encode what the team expects benign look-alikes to be. False-positive counts per decoy kind show where the rules and the model react, not how often that happens in real life."
+  ],
+  "train_positive_rows": 555,
+  "train_rows": 12000
+}

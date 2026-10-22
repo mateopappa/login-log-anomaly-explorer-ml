@@ -15,6 +15,9 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
+from types import MappingProxyType
+
+from login_anomaly.validation import require_identifier
 
 
 class ScenarioType(Enum):
@@ -34,8 +37,8 @@ class ScenarioLabel:
     is_malicious: bool
 
     def __post_init__(self) -> None:
-        if not isinstance(self.event_id, str) or not self.event_id:
-            raise ValueError("event_id must be a non-empty string")
+        # Same identifier rule as AuthEvent: a label can only name an event that could exist.
+        require_identifier(self.event_id, "event_id")
         if not isinstance(self.scenario_type, ScenarioType):
             raise ValueError("scenario_type must be a ScenarioType member")
         if not isinstance(self.is_malicious, bool):
@@ -55,25 +58,40 @@ class ScenarioLabel:
 class GroundTruth:
     """Read-only index of labels by ``event_id``.
 
-    Duplicate ``event_id`` values are rejected at construction.
-    ``label_for`` raises ``KeyError`` for an unknown ``event_id``, so a missing
-    label is never silently treated as benign. ``in`` returns False for
-    non-string keys instead of raising.
+    Construction rejects duplicate ``event_id`` values and entries that are not
+    ``ScenarioLabel`` objects. The index is exposed only as a read-only mapping.
+
+    ``label_for`` raises ``ValueError`` for a non-string key and ``KeyError`` for
+    an unknown string, so a missing label is never silently treated as benign.
+    ``in`` returns False for non-string keys instead of raising.
     """
 
     __slots__ = ("_by_event_id",)
 
     def __init__(self, labels: Iterable[ScenarioLabel]) -> None:
+        try:
+            entries = iter(labels)
+        except TypeError:
+            raise ValueError("labels must be an iterable of ScenarioLabel") from None
         index: dict[str, ScenarioLabel] = {}
-        for label in labels:
+        for label in entries:
             if not isinstance(label, ScenarioLabel):
                 raise ValueError("GroundTruth accepts only ScenarioLabel entries")
             if label.event_id in index:
                 raise ValueError(f"duplicate event_id in ground truth: {label.event_id!r}")
             index[label.event_id] = label
-        self._by_event_id = index
+        # object.__setattr__ bypasses the read-only guard below, but only during construction.
+        object.__setattr__(self, "_by_event_id", MappingProxyType(index))
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError("GroundTruth is read-only")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("GroundTruth is read-only")
 
     def label_for(self, event_id: str) -> ScenarioLabel:
+        if not isinstance(event_id, str):
+            raise ValueError("event_id must be a string")
         try:
             return self._by_event_id[event_id]
         except KeyError:
