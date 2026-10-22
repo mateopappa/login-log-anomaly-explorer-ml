@@ -39,7 +39,7 @@ Results are written to `reports/experiment.json`. The file is deterministic: the
 .venv/bin/python -m streamlit run src/login_anomaly/dashboard/app.py
 ```
 
-Tabs: generate events, run the detectors, explore alerts with their evidence, compare against labels (evaluation only), and investigations: every rule alert investigated by the deterministic investigator (no LLM), with an optional evaluation against labels. ML flags are not investigated yet.
+Tabs: generate events, run the detectors, explore alerts with their evidence, compare against labels (evaluation only), and investigations: every rule alert investigated by the deterministic investigator (no LLM), with an optional evaluation against labels. ML flags are not investigated yet. The Threat Lab tab (labels) runs the scenario catalog on fixed seeds and compares rules and ML per scenario; its alerts are not sent to the investigator yet.
 
 ## Layout
 

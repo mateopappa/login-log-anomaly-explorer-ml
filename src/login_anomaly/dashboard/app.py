@@ -12,6 +12,7 @@ from login_anomaly.dashboard.view import (
     COMPONENT_STATUS,
     SessionConfig,
     alert_rows,
+    catalog_rows,
     events_for,
     explain_alert,
     investigation_detail,
@@ -21,11 +22,15 @@ from login_anomaly.dashboard.view import (
     ml_flags,
     related_events,
     rule_alerts,
+    scenario_detail,
 )
 from login_anomaly.evaluation.experiment import train_baseline
 from login_anomaly.evaluation.investigation import evaluate_investigations
 from login_anomaly.evaluation.panel import comparison_rows, truth_for
+from login_anomaly.evaluation.threat_lab import comparison_rows as lab_comparison_rows
+from login_anomaly.evaluation.threat_lab import run_lab
 from login_anomaly.simulation.scenarios import ScenarioPlan
+from login_anomaly.threat_lab.specs import build_catalog
 
 # Hand-written cases that check the evaluator in the test suite. They are not investigations.
 AGENTIC_FIXTURES = [
@@ -68,6 +73,12 @@ def ml_flags_cached(session: SessionConfig) -> dict[str, int]:
 def investigations_cached(session: SessionConfig):  # type: ignore[no-untyped-def]
     # Observable events and rule alerts only. No labels reach the investigator.
     return investigations_for(events_cached(session), alerts_cached(session))
+
+
+@st.cache_resource(show_spinner="Running the Threat Lab scenarios (rules and ML on the same events)...")
+def lab_cached():  # type: ignore[no-untyped-def]
+    # Reuses the baseline already trained for the session; the lab never retrains or changes it.
+    return run_lab(build_catalog(), baseline_model()[0])
 
 
 @st.cache_resource(show_spinner="Generating events and labels for the evaluation panel...")
@@ -116,8 +127,8 @@ except ValueError as error:
     st.error(f"Configuration rejected: {error}")
     st.stop()
 
-tab_generate, tab_detect, tab_alerts, tab_eval, tab_agentic = st.tabs(
-    ["Generate", "Detectors", "Alerts", "Evaluation (labels)", "Investigations"]
+tab_generate, tab_detect, tab_alerts, tab_eval, tab_agentic, tab_lab = st.tabs(
+    ["Generate", "Detectors", "Alerts", "Evaluation (labels)", "Investigations", "Threat Lab (labels)"]
 )
 
 try:
@@ -266,3 +277,31 @@ with tab_agentic:
         st.caption("Simulated: hand-written cases checked by the test suite to validate the evaluator.")
         st.table([{"case": case, "expected behavior": behavior} for case, behavior in AGENTIC_FIXTURES])
         st.caption("Design and contracts: docs/agentic-evaluators.md")
+
+with tab_lab:
+    # Fixed scenario catalog on fixed Threat Lab seeds (not the sidebar dataset). Detection and scoring only.
+    st.warning("Scenario results use ground-truth labels for scoring. Detectors never read them.")
+    st.info("Alerts from these scenarios are not sent to the investigator yet. Only the sidebar dataset is investigated.")
+    lab = lab_cached()
+    st.subheader("Scenario catalog")
+    st.dataframe(catalog_rows(build_catalog()), use_container_width=True, hide_index=True)
+    st.subheader("Rules versus ML, per scenario")
+    st.caption(
+        "`rules_fp` and `ml_fp` count benign events flagged. `false_positive_alerts` counts rule alerts "
+        "with no malicious event. These are different counts."
+    )
+    st.dataframe(lab_comparison_rows(lab), use_container_width=True, hide_index=True)
+
+    chosen_scenario = st.selectbox("Scenario", [item["scenario"]["scenario_id"] for item in lab["scenarios"]], key="lab_scenario")
+    scenario = next(item for item in lab["scenarios"] if item["scenario"]["scenario_id"] == chosen_scenario)
+    detail = scenario_detail(scenario)
+    st.markdown(f"**{scenario['scenario']['description']}**")
+    st.dataframe(detail["per_seed"], use_container_width=True, hide_index=True)
+    if detail["false_positive_alerts"]:
+        st.dataframe(detail["false_positive_alerts"], use_container_width=True, hide_index=True)
+    else:
+        st.info("No false-positive alerts in this scenario.")
+    with st.expander("Threat Lab limitations"):
+        for text in lab["limitations"]:
+            st.markdown(f"- {text}")
+    st.caption("Few seeds per scenario. These numbers are not evidence of generalization or of production performance.")

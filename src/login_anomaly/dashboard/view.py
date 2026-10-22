@@ -19,7 +19,8 @@ from login_anomaly.ml.features import feature_matrix
 from login_anomaly.ml.model import predict_malicious
 from login_anomaly.simulation.config import GeneratorConfig
 from login_anomaly.simulation.generator import EventDataset, generate
-from login_anomaly.simulation.scenarios import ScenarioPlan
+from login_anomaly.simulation.scenarios import NOMINAL_RANGES, ScenarioPlan
+from login_anomaly.threat_lab.specs import ScenarioSpec
 
 # What the demo runs for real and what it does not. Shown in the agentic tab.
 COMPONENT_STATUS: tuple[dict[str, str], ...] = (
@@ -209,3 +210,35 @@ def investigation_detail(item: AlertInvestigation, evaluation: AgentEvaluationRe
         },
         "evaluation": None if evaluation is None else {**asdict(evaluation), "findings": list(evaluation.findings)},
     }
+
+
+# --- threat lab (catalog and per-scenario detail; the lab's labels were used upstream, not here) ---
+
+
+def catalog_rows(specs: tuple[ScenarioSpec, ...]) -> list[dict[str, Any]]:
+    return [
+        {
+            "scenario_id": spec.scenario_id,
+            "strategy": spec.strategy,
+            "seeds": ", ".join(str(seed) for seed in spec.seeds),
+            "campaigns": ", ".join(f"{name}={value}" for name, value in asdict(spec.plan).items() if value),
+            "ranges": "nominal" if spec.ranges == NOMINAL_RANGES else "shifted",
+            "fingerprint": spec.fingerprint()[:12],
+        }
+        for spec in specs
+    ]
+
+
+def scenario_detail(item: dict[str, Any]) -> dict[str, Any]:
+    """Per-seed F1 and false-positive alerts for one scenario from ``run_lab``."""
+    per_seed = [
+        {"method": method["method"], "seed": seed, "f1": score}
+        for method in item["methods"]
+        if method["method"] in ("rules", "ml")
+        for seed, score in zip(item["scenario"]["seeds"], method["f1_per_seed"])
+    ]
+    false_positive_alerts = [
+        {"rule / decoy kind": key, "false positive alerts": count}
+        for key, count in item["alerts_without_malicious_events_by_rule_and_decoy"].items()
+    ]
+    return {"per_seed": per_seed, "false_positive_alerts": false_positive_alerts}

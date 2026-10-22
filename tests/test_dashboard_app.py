@@ -65,3 +65,13 @@ def test_plan_that_does_not_fit_the_budget_shows_an_error_not_a_crash() -> None:
     at.sidebar.number_input[4].set_value(50).run()  # bruteforce campaigns
     assert not at.exception, [e.value for e in at.exception]
     assert any("Generation rejected" in e.value for e in at.error)
+
+
+def test_threat_lab_tab_shows_the_catalog_and_rules_versus_ml() -> None:
+    at = AppTest.from_file(str(APP), default_timeout=300).run()
+    assert not at.exception, [e.value for e in at.exception]
+    headers = [h.value for h in at.subheader]
+    assert "Scenario catalog" in headers and "Rules versus ML, per scenario" in headers
+    assert any("use ground-truth labels for scoring" in w.value for w in at.warning)
+    assert any(f.label == "Scenario" for f in at.selectbox)
+    assert any("nominal_control" in df.value.to_string() for df in at.dataframe)

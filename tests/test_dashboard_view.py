@@ -3,13 +3,16 @@
 from login_anomaly.dashboard.view import (
     SessionConfig,
     alert_rows,
+    catalog_rows,
     events_for,
     explain_alert,
     related_events,
     rule_alerts,
+    scenario_detail,
 )
 from login_anomaly.evaluation.panel import comparison_rows, truth_for
 from login_anomaly.simulation.scenarios import ScenarioPlan
+from login_anomaly.threat_lab.specs import build_catalog
 
 PLAN = ScenarioPlan(bruteforce_campaigns=2, password_spraying_campaigns=1, impossible_travel_campaigns=2, benign_travelers=2)
 SESSION = SessionConfig(seed=31, n_events=1500, n_accounts=150, duration_hours=72, plan=PLAN)
@@ -78,3 +81,29 @@ def test_comparison_rows_on_hand_built_truth() -> None:
     (row,) = comparison_rows(truth, {"m": {"evt-1", "evt-3"}})
     assert (row["tp"], row["fp"], row["fn"], row["tn"]) == (1, 1, 1, 1)
     assert row["precision"] == 0.5 and row["recall"] == 0.5
+
+
+def test_catalog_rows_list_every_scenario_with_its_seeds_and_range_kind() -> None:
+    specs = build_catalog()
+    rows = catalog_rows(specs)
+    assert [row["scenario_id"] for row in rows] == [spec.scenario_id for spec in specs]
+    by_id = {row["scenario_id"]: row for row in rows}
+    assert by_id["nominal_control"]["ranges"] == "nominal"
+    assert by_id["boundary_bruteforce"]["ranges"] == "shifted"
+    assert by_id["nominal_control"]["campaigns"] == "bruteforce_campaigns=3, password_spraying_campaigns=2, impossible_travel_campaigns=3, benign_travelers=5"
+
+
+def test_scenario_detail_pairs_each_seed_with_its_f1_and_lists_false_positive_alerts() -> None:
+    item = {
+        "scenario": {"seeds": [1001, 1002]},
+        "methods": [
+            {"method": "all_benign", "f1_per_seed": [0.0, 0.0]},
+            {"method": "rules", "f1_per_seed": [0.5, 0.75]},
+            {"method": "ml", "f1_per_seed": [0.9, 0.8]},
+        ],
+        "alerts_without_malicious_events_by_rule_and_decoy": {"password_spraying/shared_nat": 2},
+    }
+    detail = scenario_detail(item)
+    assert {"method": "rules", "seed": 1002, "f1": 0.75} in detail["per_seed"]
+    assert all(row["method"] != "all_benign" for row in detail["per_seed"])
+    assert detail["false_positive_alerts"] == [{"rule / decoy kind": "password_spraying/shared_nat", "false positive alerts": 2}]
