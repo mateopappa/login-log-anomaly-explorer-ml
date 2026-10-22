@@ -13,8 +13,9 @@ This document describes the agentic part of the project. Read the status table f
 | Conventional evaluator | Implemented, tested | `src/login_anomaly/evaluation/` |
 | Investigation contracts and tool policy | Implemented as data types and constants | `src/login_anomaly/agentic/contracts.py` |
 | Agentic Evaluator (scoring of a result) | Implemented, tested on **deterministic fixtures** | `src/login_anomaly/evaluation/agentic.py` |
+| Deterministic investigator (rule-based stand-in, no LLM) | Implemented, tested; wired to the agentic evaluator | `src/login_anomaly/agentic/investigator.py`, `src/login_anomaly/evaluation/investigation.py` |
 | Agentic Investigator (LLM that investigates) | **Designed only. Not implemented.** | none |
-| Read-only investigation tools (implementations) | **Designed only.** Names and policy exist; no backend. | none |
+| Read-only investigation tools (implementations) | Implemented, tested, over in-memory observable events (no database) | `src/login_anomaly/agentic/tools.py` |
 
 What the tests show: the contracts validate, the tool policy classifies calls, and the evaluator scores fixture results correctly. What the tests do **not** show: that any model reasons well. No LLM is called anywhere in the repository, and no API cost has been incurred by this work.
 
@@ -107,7 +108,7 @@ The contracts are Python types, not JSON Schema. A JSON Schema can be generated 
 | `get_auth_history` | `account_id`, `limit` | Recent successes and failures for one account | `limit` max 200 |
 | `get_ip_timeline` | `source_ip`, `start`, `end` | Events from one source IP in a window | Max 500 events |
 | `get_geo_context` | `country_code` | Synthetic country context (region name only) | Allowlisted countries only |
-| `get_alert_evidence` | `alert_id` | The alert's event ids and rule explanation | Only alerts already in the input |
+| `get_alert_evidence` | `alert_id` | The alert's event ids, rule, window, and the observable rows of those events | Only alerts already in the input |
 
 Errors: an unknown id returns `status="error"` with no data. A window that is too wide returns `status="error"`. None of the tools return labels, and no tool writes anything.
 

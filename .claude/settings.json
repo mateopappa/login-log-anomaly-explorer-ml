@@ -8,6 +8,13 @@
       "Bash(git log *)",
       "Bash(git show *)"
     ],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(sudo *)",
+      "Read(./.env)",
+      "Read(./.env.local)",
+      "Read(./.env.*.local)"
+    ],
     "ask": [
       "Bash(git commit *)",
       "Bash(git push *)",
@@ -17,13 +24,9 @@
       "Bash(rm *)",
       "Bash(curl *)",
       "Bash(wget *)"
-    ],
-    "deny": [
-      "Bash(rm -rf *)",
-      "Bash(sudo *)",
-      "Read(./.env)",
-      "Read(./.env.local)",
-      "Read(./.env.*.local)"
     ]
+  },
+  "enabledPlugins": {
+    "ponytail@ponytail": true
   }
 }

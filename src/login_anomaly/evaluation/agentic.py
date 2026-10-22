@@ -24,6 +24,7 @@ from login_anomaly.agentic.contracts import (
     InvestigationInput,
     InvestigationResult,
 )
+from login_anomaly.simulation.ground_truth import GroundTruth
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,12 @@ class AlertReference:
     alert_id: str
     is_true_alert: bool
     malicious_event_ids: frozenset[str]
+
+
+def reference_for(investigation_input: InvestigationInput, truth: GroundTruth) -> AlertReference:
+    """An alert is true when at least one of its events is malicious. Unknown event ids raise KeyError."""
+    malicious = frozenset(eid for eid in investigation_input.event_ids if truth.label_for(eid).is_malicious)
+    return AlertReference(alert_id=investigation_input.alert_id, is_true_alert=bool(malicious), malicious_event_ids=malicious)
 
 
 def evaluate_investigation(

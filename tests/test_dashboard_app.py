@@ -16,10 +16,45 @@ def test_app_renders_without_exceptions() -> None:
     assert at.title[0].value == "Login-log anomaly explorer"
 
 
-def test_app_shows_the_agentic_panel_as_simulated() -> None:
+def test_investigations_tab_shows_real_investigations_and_labelled_fixtures() -> None:
     at = AppTest.from_file(str(APP), default_timeout=120).run()
-    warnings = [w.value for w in at.warning]
-    assert any("Simulated" in text for text in warnings)
+    assert not at.exception, [e.value for e in at.exception]
+    metrics = {m.label: m.value for m in at.metric}
+    assert int(metrics["Rule alerts"]) > 0
+    assert metrics["Investigated"] == metrics["Rule alerts"]
+    assert "Scored" in metrics  # evaluation shown by default, marked as using labels
+    assert any("not investigated" in i.value for i in at.info)  # ML flags are not presented as investigated
+    captions = [c.value for c in at.caption]
+    assert any(text.startswith("Simulated") for text in captions)  # fixtures kept, labelled as simulated
+
+
+def test_selecting_an_alert_shows_its_investigation() -> None:
+    at = AppTest.from_file(str(APP), default_timeout=120).run()
+    box = at.selectbox(key="agentic_alert")
+    last = box.options[-1]
+    box.select(last).run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert any(last in m.value for m in at.markdown)
+    assert any(m.label == "Tool calls" for m in at.metric)
+
+
+def test_evaluation_can_be_hidden() -> None:
+    at = AppTest.from_file(str(APP), default_timeout=120).run()
+    at.toggle(key="agentic_show_eval").set_value(False).run()
+    assert not at.exception, [e.value for e in at.exception]
+    labels = {m.label for m in at.metric}
+    assert "Scored" not in labels and "Investigated" in labels
+
+
+def test_dataset_without_campaigns_renders() -> None:
+    at = AppTest.from_file(str(APP), default_timeout=120).run()
+    for index in (4, 5, 6, 7):  # bruteforce, spraying, travel, travelers
+        at.sidebar.number_input[index].set_value(0)
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    metrics = {m.label: m.value for m in at.metric}
+    if int(metrics["Rule alerts"]) == 0:
+        assert any("No rule alerts to investigate" in i.value for i in at.info)
 
 
 def test_plan_that_does_not_fit_the_budget_shows_an_error_not_a_crash() -> None:
