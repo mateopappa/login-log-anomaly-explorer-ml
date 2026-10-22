@@ -160,3 +160,29 @@ def test_scanner_ignores_allowed_imports(tmp_path: Path) -> None:
         "from login_anomaly.events import AuthEvent\n",
     )
     assert scan_package(package_root) == []
+
+
+RUNTIME_MODULES = (
+    "workflow.py",
+    "correlation.py",
+    "agentic/cases.py",
+    "agentic/provider.py",
+    "agentic/case_investigator.py",
+    "agentic/reviewer.py",
+    "agentic/investigator.py",
+    "agentic/tools.py",
+    "agentic/contracts.py",
+    "threat_lab/proposals.py",
+    "dashboard/view.py",
+    "live/sources.py",
+    "live/engine.py",
+)
+
+
+@pytest.mark.parametrize("module", RUNTIME_MODULES)
+def test_runtime_modules_cannot_reach_labels_through_evaluation(module: str) -> None:
+    # Runtime agents and workflow stages run before labels exist; the evaluation layer holds them.
+    tree = ast.parse((PACKAGE_ROOT / module).read_text(encoding="utf-8"))
+    imported = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module}
+    imported |= {alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
+    assert not any(name.startswith(("login_anomaly.evaluation", FORBIDDEN)) for name in imported), imported

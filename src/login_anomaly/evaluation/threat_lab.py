@@ -1,4 +1,4 @@
-"""Threat Lab runner: execute scenario specs and compare the rule detector with the ML baseline.
+"""Threat Lab runner: execute scenario specs through the detector and investigation workflow.
 
 Evaluation side only: it generates labelled data, so it lives here, next to the experiment.
 Each spec is scored with the experiment's own per-set evaluation (same dataset shape,
@@ -8,7 +8,7 @@ so Threat Lab numbers are directly comparable with ``reports/experiment.json``.
 Read-only towards the system under test: the model is trained once by the experiment's
 ``train_baseline`` (or passed in) and only used for prediction; rules and features are
 called, never configured; seeds reserved for training and the reviewed evaluation sets are
-refused. The investigator is not involved here and receives nothing from this module.
+refused. Investigation quality is scored only by the evaluation-side experiment runner.
 
     python -m login_anomaly.evaluation.threat_lab [--out reports/threat_lab.json]
 """
@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from login_anomaly.evaluation.experiment import EVAL_SETS, TRAIN_SEEDS, EvalSet, _evaluate_set, dataset_config, train_baseline
+from login_anomaly.threat_lab.proposals import ScenarioProposalProvider, validate_proposal
 from login_anomaly.threat_lab.specs import ScenarioSpec, build_catalog
 
 RESERVED_SEEDS: frozenset[int] = frozenset(TRAIN_SEEDS) | frozenset(seed for eval_set in EVAL_SETS for seed in eval_set.seeds)
@@ -54,6 +55,8 @@ def run_scenario(spec: ScenarioSpec, model: object) -> dict[str, Any]:
         "dataset_shape": _dataset_shape(),
         "datasets": result["datasets"],
         "methods": result["methods"],
+        "investigation": result["investigation"],
+        "case_investigation": result["case_investigation"],
         "alerts_without_malicious_events_by_rule_and_decoy": result["alerts_without_malicious_events_by_rule_and_decoy"],
     }
 
@@ -72,8 +75,13 @@ def run_lab(specs: tuple[ScenarioSpec, ...], model: object | None = None) -> dic
     }
 
 
+def run_proposal(provider: ScenarioProposalProvider, model: object | None = None) -> dict[str, Any]:
+    """Validate one untrusted scenario proposal, then run it exactly like a catalog scenario."""
+    return run_lab((validate_proposal(provider.propose()),), model)
+
+
 def comparison_rows(lab: dict[str, Any]) -> list[dict[str, Any]]:
-    """One row per scenario: rules versus ML on the same events. For reports and a future dashboard tab."""
+    """One row per scenario with separate detector and investigation-flow results."""
     rows = []
     for item in lab["scenarios"]:
         methods = {m["method"]: m for m in item["methods"]}
@@ -93,6 +101,12 @@ def comparison_rows(lab: dict[str, Any]) -> list[dict[str, Any]]:
                 "rules_f1_range": [rules["f1_min"], rules["f1_max"]],
                 "ml_f1_range": [ml["f1_min"], ml["f1_max"]],
                 "false_positive_alerts": sum(item["alerts_without_malicious_events_by_rule_and_decoy"].values()),
+                "rule_alerts": item["investigation"]["alerts"],
+                "investigated": item["investigation"]["investigated"],
+                "investigation_correct": item["investigation"]["correct"],
+                "investigation_inconclusive": item["investigation"]["inconclusive"],
+                "cases": item["case_investigation"]["cases"],
+                "case_agent_inconclusive": item["case_investigation"]["inconclusive"],
             }
         )
     return rows

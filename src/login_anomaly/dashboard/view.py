@@ -16,21 +16,25 @@ from login_anomaly.agentic.contracts import MAX_STEPS, MAX_TOOL_CALLS, AgentEval
 from login_anomaly.agentic.investigator import AlertInvestigation, investigate_alerts
 from login_anomaly.detection.rules import Alert, detect
 from login_anomaly.ml.features import feature_matrix
+from login_anomaly.live.engine import SimulationService
 from login_anomaly.ml.model import predict_malicious
 from login_anomaly.simulation.config import GeneratorConfig
 from login_anomaly.simulation.generator import EventDataset, generate
 from login_anomaly.simulation.scenarios import NOMINAL_RANGES, ScenarioPlan
 from login_anomaly.threat_lab.specs import ScenarioSpec
+from login_anomaly.workflow import DetectionWorkflowResult, ModelRunMetadata, run_detection_workflow
 
 # What the demo runs for real and what it does not. Shown in the agentic tab.
 COMPONENT_STATUS: tuple[dict[str, str], ...] = (
     {"component": "Synthetic event generator", "status": "Implemented", "note": "Synthetic data only; seeded and reproducible."},
     {"component": "Rule detector", "status": "Implemented", "note": "Its alerts are the investigator's input."},
-    {"component": "ML detector", "status": "Implemented", "note": "Event-level flags. Not investigated: no ML-to-investigator integration yet."},
+    {"component": "ML detector", "status": "Implemented", "note": "Event-level signals become provenance-bound cases."},
     {"component": "Investigator (deterministic)", "status": "Implemented", "note": "Rule-based playbooks over read-only tools. No LLM."},
-    {"component": "Investigator (LLM)", "status": "Pending", "note": "Designed only; would replace the deterministic one behind the same contract."},
-    {"component": "Agentic evaluator", "status": "Implemented", "note": "Scores investigations with labels, on the evaluation side only."},
-    {"component": "Threat Simulation Agent", "status": "Pending", "note": "Not implemented."},
+    {"component": "Case Investigator", "status": "Implemented (mock)", "note": "Bounded provider-independent loop; mock mode only, no LLM call."},
+    {"component": "Case Reviewer", "status": "Implemented (deterministic)", "note": "Runtime evidence/policy review without labels."},
+    {"component": "Offline evaluator", "status": "Implemented", "note": "Uses labels only after runtime work is complete."},
+    {"component": "Scenario proposal agent", "status": "Implemented (mock)", "note": "Strict validated ScenarioSpec proposals; no executable code."},
+    {"component": "SOC Live simulator", "status": "Implemented", "note": "Replay and continuous modes release events over time; agents are mock."},
 )
 
 
@@ -64,6 +68,11 @@ def rule_alerts(events: EventDataset) -> list[Alert]:
 def ml_flags(model: object, events: EventDataset) -> dict[str, int]:
     ids, rows = feature_matrix(events.events)
     return dict(zip(ids, predict_malicious(model, rows)))  # type: ignore[arg-type]
+
+
+def workflow_for(model: object, events: EventDataset) -> DetectionWorkflowResult:
+    """Run the complete label-free SOC workflow for one dashboard dataset."""
+    return run_detection_workflow(events, model, ModelRunMetadata("dashboard-rf-baseline"))  # type: ignore[arg-type]
 
 
 def alert_rows(alerts: list[Alert]) -> list[dict[str, Any]]:
@@ -118,6 +127,77 @@ def investigations_for(events: EventDataset, alerts: list[Alert]) -> tuple[Alert
     return investigate_alerts(events.events, alerts)
 
 
+def case_rows(workflow: DetectionWorkflowResult) -> list[dict[str, Any]]:
+    reviews = {review.case_id: review for review in workflow.case_reviews}
+    runs = {run.case.case_id: run for run in workflow.case_investigations}
+    return [
+        {
+            "case_id": case.case_id,
+            "kind": case.case_kind,
+            "events": len(case.event_ids),
+            "signals": len(case.signals),
+            "priority": case.priority_hint,
+            "mode": runs[case.case_id].mode,
+            "verdict": runs[case.case_id].result.verdict,
+            "review": reviews[case.case_id].quality,
+        }
+        for case in workflow.cases
+    ]
+
+
+def case_detail(workflow: DetectionWorkflowResult, case_id: str) -> dict[str, Any]:
+    run = next(run for run in workflow.case_investigations if run.case.case_id == case_id)
+    review = next(review for review in workflow.case_reviews if review.case_id == case_id)
+    return {
+        "case_id": run.case.case_id,
+        "kind": run.case.case_kind,
+        "dataset_id": run.case.dataset_id,
+        "event_ids": list(run.case.event_ids),
+        "mode": run.mode,
+        "provider": run.provider_id,
+        "verdict": run.result.verdict,
+        "confidence": run.result.confidence,
+        "justification": run.result.justification,
+        "evidence": [asdict(item) for item in run.result.evidence],
+        "tool_calls": [asdict(item) for item in run.result.tool_calls],
+        "errors": list(run.errors),
+        "review": asdict(review),
+    }
+
+
+def live_case_detail(service: SimulationService, case_id: str) -> dict[str, Any] | None:
+    """Selected SOC Live case: the events it was built from, plus its investigation and review if run."""
+    record = service.case_record(case_id)
+    if record is None:
+        return None
+    detail: dict[str, Any] = {
+        "case_id": case_id,
+        "kind": record.case.case_kind,
+        "priority": record.case.priority_hint,
+        "signals": len(record.case.signals),
+        "events": list(record.events),
+    }
+    if record.run is None or record.review is None:
+        detail["note"] = "Not investigated: the ML-only investigation budget for this session was reached."
+        return detail
+    run, review = record.run, record.review
+    detail.update(
+        {
+            "mode": run.mode,
+            "provider": run.provider_id,
+            "verdict": run.result.verdict,
+            "confidence": run.result.confidence,
+            "justification": run.result.justification,
+            "evidence": [asdict(item) for item in run.result.evidence],
+            "tool_calls": [asdict(item) for item in run.result.tool_calls],
+            "uncertainty": list(review.uncertainty),
+            "errors": list(run.errors),
+            "review": asdict(review),
+        }
+    )
+    return detail
+
+
 def _correctness(evaluation: AgentEvaluationResult | None) -> str:
     if evaluation is None:
         return "not scored"
@@ -141,7 +221,7 @@ def investigation_summary(
         "benign": verdicts["benign"],
         "inconclusive": verdicts["inconclusive"],
         "limit_reached": sum(_limit_reached(item) for item in investigations),
-        "tool_errors": sum(len(item.run.failed_tools) for item in done),  # type: ignore[union-attr]
+        "tool_errors": sum(len(item.run.failed_tools) for item in done if item.run is not None),
     }
     if evaluations is not None:
         scored = [evaluations[item.alert_id] for item in done if item.alert_id in evaluations]

@@ -1,6 +1,6 @@
 # Login-log anomaly explorer
 
-A local, reproducible prototype for detecting suspicious authentication activity in **synthetic** login logs. It generates labelled traffic, runs a rule detector and an ML baseline independently, compares them against ground truth, and shows the results in a local dashboard. An agentic investigator and evaluator are **designed** in `docs/agentic-evaluators.md`, not implemented.
+A local, reproducible prototype for detecting suspicious authentication activity in **synthetic** login logs. It generates labelled traffic, runs a rule detector and an ML baseline independently, groups their signals into label-free cases, investigates each case with a bounded read-only investigator, reviews the result, and compares everything against ground truth only at evaluation time. The only investigator and scenario-proposal provider today are **deterministic mocks**; no LLM is called. Real LLM agents are designed in `docs/agentic-evaluators.md` but not validated.
 
 Read `docs/agentic-evaluators.md` for the status of each component before drawing conclusions.
 
@@ -31,7 +31,7 @@ Trains the ML baseline on four generated datasets and evaluates on two others, w
 .venv/bin/python -m login_anomaly.evaluation.experiment --out reports/experiment.json
 ```
 
-Results are written to `reports/experiment.json`. The file is deterministic: the same command gives byte-identical output. It is committed as the reviewed artifact; regenerate it only when the experiment changes. All numbers are synthetic, from 2 seeds (nominal sets) or 3 seeds (boundary stress set) per evaluation set, and the model is trained on 4 training seeds. Read the `limitations` field before quoting any number.
+Results are written to `reports/experiment.json`. The file is deterministic: the same command gives identical output. It is committed as the reviewed artifact; regenerate it only when the experiment changes. Each evaluation set reports detector metrics (`methods`) and, separately, the workflow's investigation and case-investigation quality (`investigation`, `case_investigation`). All numbers are synthetic, from 2 seeds (nominal sets) or 3 seeds (boundary stress set) per evaluation set, and the model is trained on 4 training seeds. Read the `limitations` field before quoting any number.
 
 ## Run the dashboard
 
@@ -39,7 +39,92 @@ Results are written to `reports/experiment.json`. The file is deterministic: the
 .venv/bin/python -m streamlit run src/login_anomaly/dashboard/app.py
 ```
 
-Tabs: generate events, run the detectors, explore alerts with their evidence, compare against labels (evaluation only), and investigations: every rule alert investigated by the deterministic investigator (no LLM), with an optional evaluation against labels. ML flags are not investigated yet. The Threat Lab tab (labels) runs the scenario catalog on fixed seeds and compares rules and ML per scenario; its alerts are not sent to the investigator yet.
+Tabs: generate events, **SOC Live** (below), run the detectors, explore alerts with their evidence, and compare against labels (evaluation only). **Investigations** shows the case workbench first: rule-backed cases (a rule alert plus any ML signal on the same event) and ML-only cases (ML positives with no rule alert), each with its mock investigator run, the deterministic reviewer output, and the execution mode. Below it sits the native rule-alert investigator with an optional evaluation against labels. The **Threat Lab (labels)** tab runs the scenario catalog on fixed seeds, compares rules and ML per scenario, and runs one mock scenario proposal after it has passed the fixed-schema validation.
+
+Every execution mode shown in the UI is `mock`. Nothing in the dashboard calls a paid or external service.
+
+### Commands for manual testing
+
+```bash
+# 1. Full test suite (about 15 seconds, no network)
+.venv/bin/python -m pytest -q
+
+# 2. Workflow, cases, investigator, reviewer, and evaluation only
+.venv/bin/python -m pytest -q tests/test_workflow.py tests/test_workflow_evaluation.py tests/test_correlation.py tests/test_case_investigator.py tests/test_scenario_proposals.py
+
+# 3. Minimal end-to-end run: generate, detect, build cases, investigate, review, evaluate, write the experiment JSON
+.venv/bin/python -m login_anomaly.evaluation.experiment --out /tmp/login-anomaly-e2e.json
+
+# 4. Dashboard (open the printed local URL)
+.venv/bin/python -m streamlit run src/login_anomaly/dashboard/app.py
+```
+
+Manual acceptance checklist (dashboard, default sidebar values):
+
+- [ ] **Generate** tab shows a dataset with a seed and manifest.
+- [ ] **Detectors** tab shows rule alerts and an ML line "Flagged N events".
+- [ ] **Investigations** → Case workbench lists cases with both `rule_backed` and `ml_only` kinds (the default seed has both) and the caption shows `mode: mock`.
+- [ ] Selecting a case shows its verdict, evidence, tool calls, and reviewer output (`quality`, `policy_findings`, `uncertainty`).
+- [ ] Turning off the evaluation toggle hides every label-based metric; the native rule-alert table still renders.
+- [ ] **Threat Lab** shows the scenario catalog, the rules-versus-ML table, and a "Mock scenario proposal" row with `strategy` `agent_proposal`.
+- [ ] Changing the seed or campaign counts re-runs the workflow without an error page; an impossible plan shows "Generation rejected" rather than a crash.
+
+## SOC Live
+
+SOC Live presents the system as if it were watching authentication traffic. Events are released over time, and the detectors and agents only process what has been released so far. It is a local demo, not a monitoring product.
+
+- **Replay**: a fixed scenario (seed, preset) generated by the existing generator and released in its original order. The same scenario and seed always give the same stream and the same results.
+- **Continuous**: deterministic 3-hour chunks generated on demand, with benign background traffic. Campaigns from the selected families appear in every third chunk.
+- **Controls**: Start, Pause, Resume, Reset. The playback rate defaults to **5 events per second** (range 1 to 50). Pause stops releases; Resume continues from the same position. Reset returns to Idle and clears everything derived from the run. Stop ends a continuous run for good.
+- **Status**: Idle, Running, Paused, Completed (replay finished, or stopped by the user), or Error. An error shows a safe message, and Reset is the recovery path.
+
+Sequence for each released batch (the same code path for both modes):
+
+1. Released events are added to a retained buffer. Events older than 2 hours of simulated time, or beyond 5000 events, are dropped.
+2. The trained ML baseline scores the new events. It is not retrained.
+3. The rule detector runs over the retained buffer. An alert that grows (for example, a bruteforce window that slides) updates the same incident instead of creating a new one.
+4. ML-positive events are attached to a rule alert only when they name the same event id. Otherwise they become ML-only cases. Ambiguous matches stay separate, with their candidates recorded.
+5. Each new or changed case runs the mock bounded investigator over the retained events, then the deterministic reviewer. Unchanged cases keep their earlier result.
+
+Isolation guarantees:
+
+- Runtime code (`live/`, `workflow`, `correlation`, `agentic/`, the dashboard view) never imports `evaluation` or the ground-truth module. A test checks this for each module.
+- The replay and continuous sources release `AuthEvent` objects only. No labels are created for them.
+- Each browser session has its own service in session state. Two sessions never share a simulation.
+
+Agents: every investigation and review is labelled `mock`. No LLM is called, no API key is read, and nothing is paid. The panel shows the provider id.
+
+Known limitations:
+
+- Detection uses a 2-hour context window, which covers the longest rule window (120 minutes). A campaign that spans more than that is detected only from its retained part.
+- Continuous chunks are independent. Accounts and IP histories do not carry across chunks, and campaigns never cross a chunk boundary.
+- Processing is synchronous, so `pending` counts events not yet released, not events waiting in a queue. There is no staged or delayed presentation of investigation steps. Latency is measured with a monotonic clock and reported as is.
+- ML-only cases are mostly false positives on benign traffic. Only 25 are investigated per session. The rest are shown as "not investigated".
+- "Open cases" means cases whose evidence is still inside the retention window. Cases remain in the history list after that, with status "closed".
+- Only the four replay presets listed in `live/sources.py` are available. Threat Lab scenarios are not replayed here.
+
+Commands:
+
+```bash
+# Focused SOC Live tests (engine, sources, headless dashboard)
+.venv/bin/python -m pytest -q tests/test_live_engine.py tests/test_live_sources.py tests/test_dashboard_live.py
+
+# Dashboard: open the SOC Live tab
+.venv/bin/python -m streamlit run src/login_anomaly/dashboard/app.py
+```
+
+Manual acceptance (SOC Live tab):
+
+- [ ] **Replay**: scenario "Mixed campaigns", seed 31, rate 5. Press Start. "Released" rises by about 5 per second.
+- [ ] Rule alerts and cases appear only after their events are released. The counts never exceed what has been released.
+- [ ] Pause: "Released" stops. Wait a few seconds, then Resume. The count continues from where it stopped, with no duplicates in the event stream.
+- [ ] Reset: all counters, alerts, cases and activity return to zero. Start again and the first events match the previous run.
+- [ ] Let the replay finish. The status reads Completed with "Replay finished". Released and processed both equal the generated total, and pending is 0.
+- [ ] **Continuous**: Start with all attack families. Events keep arriving. Campaign bursts appear every few chunks as alerts and cases.
+- [ ] Press Stop (or Pause and Reset). Generation ends. Reset and Start again works.
+- [ ] Open a case. Its evidence rows, verdict, uncertainty and review are shown, and the mode reads `mock`.
+- [ ] Every agent label says mock. No key or network setting is needed.
+- [ ] Open a second browser tab. Starting a simulation there does not change the first tab.
 
 ## Layout
 
@@ -50,15 +135,34 @@ src/login_anomaly/
   simulation/            generator, scenarios, ground truth, manifest, config
   detection/rules.py     rule detector (events only)
   ml/                    causal features and the baseline model (events only)
-  evaluation/            metrics, experiment, evaluation panel, agentic evaluator
-  agentic/contracts.py   investigator/evaluator contracts and tool policy
+  workflow.py            label-free runtime workflow (rules, ML signals, cases, investigation, review)
+  correlation.py         exact event-id association of rule alerts and ML signals into cases
+  evaluation/            metrics, experiment, workflow evaluation, Threat Lab runner, evaluation panel
+  agentic/               contracts, tools, native investigator, case investigator, reviewer, mock provider
+  threat_lab/            scenario catalog, specs, and validated scenario proposals
+  live/                  SOC Live: replay and continuous sources, and the incremental service
   dashboard/             view logic (no Streamlit) and the Streamlit app
 docs/agentic-evaluators.md   design, diagram, contracts, status
 ```
 
 ## Ground-truth boundary
 
-Labels exist only in `simulation/ground_truth.py` and are returned only by `generate_with_truth()`. A static test (`tests/test_ground_truth_isolation.py`) fails if any module outside `simulation/` and `evaluation/` imports the ground-truth module or the truth-bearing names. This is a structural guard. It does not catch dynamic imports, and it is not a runtime security boundary.
+Labels exist only in `simulation/ground_truth.py` and are returned only by `generate_with_truth()`. A static test (`tests/test_ground_truth_isolation.py`) fails if any module outside `simulation/` and `evaluation/` imports the ground-truth module or the truth-bearing names. A second parametrized test fails if a runtime module (workflow, correlation, agentic, proposals, dashboard view) imports the `evaluation` package at all, so labels cannot reach runtime through it. This is a structural guard. It does not catch dynamic imports, and it is not a runtime security boundary.
+
+## Agent Roles (Mock & Deterministic)
+
+The MVP defines three bounded agent roles in the investigation and threat evaluation loop:
+
+1. **Investigator Agent** (`src/login_anomaly/agentic/case_investigator.py`, `provider.py`):
+   - Receives an investigation case with observable events only.
+   - Operates in a strictly bounded loop (step, time, and retry budgets) using read-only inquiry tools (`tools.py`).
+   - In the current MVP, operates via `MockInvestigatorProvider` producing deterministic evidence-backed verdicts without calling an external LLM.
+2. **Investigation Reviewer** (`src/login_anomaly/agentic/reviewer.py`):
+   - Performs independent, rule-based auditing of each completed investigation.
+   - Validates event citation integrity, policy compliance, uncertainty reporting, and flags zero-confidence or error states.
+3. **Threat Lab Scenario Proposer** (`src/login_anomaly/threat_lab/proposals.py`):
+   - Generates candidate adversarial attack and decoy scenario specifications (`ScenarioSpec`).
+   - In the current MVP, uses a deterministic mock proposer whose outputs must strictly conform to frozen schema validation before reaching the evaluation runner.
 
 ## Limitations
 
@@ -67,4 +171,15 @@ Labels exist only in `simulation/ground_truth.py` and are returned only by `gene
 - The boundary stress set sits just outside the rule thresholds by design. It shows how fast rules fail at their edge (rules F1 0.01, ML 0.70). It is not evidence of generalization. A real shift test (different attacker behaviour, far from the thresholds) is future work.
 - The ML baseline was trained on the nominal specification only. None of these numbers estimates performance on real logs, and 2 or 3 seeds per evaluation set are too few to rank the methods with confidence.
 - The dashboard seed control stops at 2^53-1, the largest integer a browser number holds exactly. The generator accepts up to 2^63-1.
-- The agentic investigator does not exist. The agentic evaluator is checked with hand-written fixtures.
+- The case investigator and scenario proposal provider are mocks. They show the bounded loop, validation, and review contracts, not model reasoning. The mock marks every rule-backed case malicious, so its case verdicts say nothing about an LLM.
+- Case correlation uses exact event-id matches only. An ML signal on an event covered by two alerts stays an ML-only case, with its candidates recorded, rather than being attached to either alert.
+- The reviewer's checks are rule-based (citations, zero-confidence verdicts, recorded errors). They are not an independent model judgment.
+- Continuous live simulation generates independent chunks; user account and IP histories do not persist across chunk boundaries.
+- ML-only case investigations are capped at 25 per live session.
+
+## Planned Future Work
+
+- **SPA Frontend Redesign**: Replace the preliminary Streamlit UI with a modern, high-performance single-page application.
+- **Production LLM Provider Integration**: Integrate live LLM providers for the Investigator and Scenario Proposer agents with prompt engineering and agentic contract evaluations.
+- **Production Data Infrastructure**: Implement streaming event ingestion (e.g., Kafka), persistent account/IP feature stores across simulation chunks, and Kubernetes deployment manifests.
+- **Advanced Machine Learning**: Implement unsupervised anomaly detection, online model adaptation, and cross-feature anomaly scoring beyond synthetic rule boundaries.

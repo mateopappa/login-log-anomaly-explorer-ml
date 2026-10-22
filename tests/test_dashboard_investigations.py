@@ -100,11 +100,11 @@ def test_investigations_are_identical_with_or_without_evaluation(events, alerts,
     assert set(evaluations) == {i.alert_id for i in investigations}  # labels never filter investigations
 
 
-def test_ml_is_marked_as_not_investigated() -> None:
+def test_ml_signals_are_marked_as_cases_and_mock_investigation_is_labelled() -> None:
+    statuses = {row["component"]: row["status"] for row in COMPONENT_STATUS}
     ml = next(row for row in COMPONENT_STATUS if row["component"] == "ML detector")
-    assert "Not investigated" in ml["note"]
-    pending = {row["component"] for row in COMPONENT_STATUS if row["status"] == "Pending"}
-    assert pending == {"Investigator (LLM)", "Threat Simulation Agent"}
+    assert "cases" in ml["note"]
+    assert statuses["Case Investigator"] == "Implemented (mock)"  # labelled as mock, never as an LLM
 
 
 def test_view_module_gives_the_investigator_events_only() -> None:
@@ -156,3 +156,35 @@ def test_budget_limit_is_visible_in_rows_and_detail(events, alerts) -> None:  # 
 def test_bad_budget_raises_once_instead_of_failing_every_alert(events, alerts) -> None:  # type: ignore[no-untyped-def]
     with pytest.raises(ValueError):
         investigate_alerts(events.events, alerts, max_tool_calls=0)
+
+
+def test_live_case_detail_exposes_budget_errors_and_review() -> None:
+    from login_anomaly.dashboard.view import live_case_detail
+    from login_anomaly.live.engine import LiveConfig, SimulationService, SimulationState
+
+    class Clock:
+        now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    class FlagNothing:
+        classes_ = [0, 1]
+
+        def predict_proba(self, rows):  # type: ignore[no-untyped-def]
+            import numpy as np
+
+            return np.array([[1.0, 0.0]] * len(rows))
+
+    clock = Clock()
+    service = SimulationService(LiveConfig("replay", 31, scenario="Bruteforce only"), FlagNothing(), clock=clock)
+    service.start()
+    while service.state is SimulationState.RUNNING:
+        clock.now += 1.0
+        service.advance()
+    case_id = next(row["case_id"] for row in service.cases() if row["kind"] == "rule_backed")
+    detail = live_case_detail(service, case_id)
+    assert detail is not None and detail["mode"] == "mock"
+    assert detail["review"]["case_id"] == case_id and "uncertainty" in detail
+    assert all("event_id" in row for row in detail["events"])
+    assert live_case_detail(service, "case-does-not-exist") is None

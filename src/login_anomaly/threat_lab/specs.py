@@ -197,7 +197,38 @@ class BoundaryShift:
         return tuple(specs)
 
 
-DEFAULT_STRATEGIES: tuple[ScenarioStrategy, ...] = (NominalControl(), DecoyPressure(), BoundaryShift())
+@dataclass(frozen=True)
+class BenignBehaviorShift:
+    """More benign roaming and shared-address activity, with nominal attacks retained.
+
+    This changes the benign feature distribution (country changes, new IPs and
+    failures from a shared source), rather than merely changing random seeds.
+    """
+
+    benign_travelers: int = 25
+    benign_decoys: int = 12
+    name: str = "benign_behavior_shift"
+
+    def __post_init__(self) -> None:
+        require_int(self.benign_travelers, "benign_travelers", minimum=1, maximum=MAX_SEED)
+        require_int(self.benign_decoys, "benign_decoys", minimum=len(DECOY_KINDS))
+        if self.benign_decoys % len(DECOY_KINDS):
+            raise ValueError(f"benign_decoys must be a multiple of {len(DECOY_KINDS)}")
+
+    def scenarios(self, seeds: tuple[int, ...]) -> tuple[ScenarioSpec, ...]:
+        return (
+            ScenarioSpec(
+                "benign_behavior_shift",
+                self.name,
+                "Nominal attacks with elevated benign multi-country travelers and shared-address decoys.",
+                seeds,
+                replace(BASE_PLAN, benign_travelers=self.benign_travelers, benign_decoys=self.benign_decoys),
+                tags=("distribution_shift", "benign_roaming", "shared_address"),
+            ),
+        )
+
+
+DEFAULT_STRATEGIES: tuple[ScenarioStrategy, ...] = (NominalControl(), DecoyPressure(), BoundaryShift(), BenignBehaviorShift())
 
 
 def build_catalog(

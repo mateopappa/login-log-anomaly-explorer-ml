@@ -12,24 +12,28 @@ from login_anomaly.dashboard.view import (
     COMPONENT_STATUS,
     SessionConfig,
     alert_rows,
+    case_detail,
+    case_rows,
     catalog_rows,
     events_for,
     explain_alert,
     investigation_detail,
     investigation_rows,
     investigation_summary,
-    investigations_for,
-    ml_flags,
+    live_case_detail,
     related_events,
-    rule_alerts,
     scenario_detail,
+    workflow_for,
 )
 from login_anomaly.evaluation.experiment import train_baseline
 from login_anomaly.evaluation.investigation import evaluate_investigations
 from login_anomaly.evaluation.panel import comparison_rows, truth_for
 from login_anomaly.evaluation.threat_lab import comparison_rows as lab_comparison_rows
-from login_anomaly.evaluation.threat_lab import run_lab
+from login_anomaly.evaluation.threat_lab import run_lab, run_proposal
+from login_anomaly.live.engine import DEFAULT_RATE, MAX_RATE, MIN_RATE, LiveConfig, SimulationService
+from login_anomaly.live.sources import ATTACK_FAMILIES, REPLAY_SCENARIOS
 from login_anomaly.simulation.scenarios import ScenarioPlan
+from login_anomaly.threat_lab.proposals import MockScenarioProvider, ScenarioProposalError
 from login_anomaly.threat_lab.specs import build_catalog
 
 # Hand-written cases that check the evaluator in the test suite. They are not investigations.
@@ -59,26 +63,26 @@ def events_cached(session: SessionConfig):  # type: ignore[no-untyped-def]
     return events_for(session)
 
 
-@st.cache_resource(show_spinner="Running the rule detector...")
-def alerts_cached(session: SessionConfig):  # type: ignore[no-untyped-def]
-    return rule_alerts(events_cached(session))
-
-
-@st.cache_resource(show_spinner="Scoring events with the ML baseline...")
-def ml_flags_cached(session: SessionConfig) -> dict[str, int]:
-    return ml_flags(baseline_model()[0], events_cached(session))
+@st.cache_resource(show_spinner="Running the label-free case workflow...")
+def workflow_cached(session: SessionConfig):  # type: ignore[no-untyped-def]
+    return workflow_for(baseline_model()[0], events_cached(session))
 
 
 @st.cache_resource(show_spinner="Investigating rule alerts...")
 def investigations_cached(session: SessionConfig):  # type: ignore[no-untyped-def]
     # Observable events and rule alerts only. No labels reach the investigator.
-    return investigations_for(events_cached(session), alerts_cached(session))
+    return workflow_cached(session).investigations
 
 
 @st.cache_resource(show_spinner="Running the Threat Lab scenarios (rules and ML on the same events)...")
 def lab_cached():  # type: ignore[no-untyped-def]
     # Reuses the baseline already trained for the session; the lab never retrains or changes it.
     return run_lab(build_catalog(), baseline_model()[0])
+
+
+@st.cache_resource(show_spinner="Validating and running the mock scenario proposal...")
+def proposal_cached():  # type: ignore[no-untyped-def]
+    return run_proposal(MockScenarioProvider(), baseline_model()[0])
 
 
 @st.cache_resource(show_spinner="Generating events and labels for the evaluation panel...")
@@ -93,6 +97,108 @@ def evaluations_cached(session: SessionConfig):  # type: ignore[no-untyped-def]
 
 def verdict_badge(verdict: str | None) -> str:
     return f":{VERDICT_COLORS.get(verdict or '', 'gray')}[**{verdict or 'n/a'}**]"
+
+
+# SOC Live. Each browser session keeps its own service in st.session_state, so sessions never share state.
+LIVE_KEY = "soc_live_service"
+LIVE_MODES = {"Replay": "replay", "Continuous": "continuous"}
+
+
+def live_start() -> None:
+    state = st.session_state
+    try:
+        config = LiveConfig(
+            mode=LIVE_MODES[state["live_mode"]],
+            seed=int(state["live_seed"]),
+            scenario=state["live_scenario"],
+            attacks=frozenset(state["live_attacks"]),
+            events_per_second=float(state["live_rate"]),
+        )
+    except ValueError as error:
+        state["live_error"] = f"Configuration rejected: {error}"
+        return
+    state["live_error"] = None
+    service = SimulationService(config, baseline_model()[0])
+    service.start()
+    state[LIVE_KEY] = service
+
+
+def live_action(name: str) -> None:
+    if name == "reset":
+        st.session_state[LIVE_KEY] = None  # a fresh IDLE session on the next Start
+    elif st.session_state.get(LIVE_KEY) is not None:
+        getattr(st.session_state[LIVE_KEY], name)()
+
+
+@st.fragment(run_every=1.0)
+def live_panel() -> None:
+    # Re-runs every second on its own, so the page updates without a full reload.
+    service: SimulationService | None = st.session_state.get(LIVE_KEY)
+    if service is not None:
+        service.advance()  # releases only the events the elapsed time has earned
+    summary = service.summary() if service is not None else None
+    state = summary["state"] if summary else "idle"
+    busy = service is not None
+
+    st.subheader("SOC Live")
+    st.info(
+        "**Mock agents.** The investigator and reviewer are deterministic and local. "
+        "No LLM is called, no API key is used, and nothing is paid. Ground truth is not visible to any agent."
+    )
+    controls = st.columns(5)
+    controls[0].radio("Mode", list(LIVE_MODES), horizontal=True, key="live_mode", disabled=busy)
+    controls[1].selectbox("Replay scenario", list(REPLAY_SCENARIOS), key="live_scenario", disabled=busy, help="Used in replay mode.")
+    controls[2].number_input("Seed", min_value=0, max_value=2**53 - 1, value=31, step=1, key="live_seed", disabled=busy)
+    controls[3].multiselect("Attack families", list(ATTACK_FAMILIES), default=list(ATTACK_FAMILIES), key="live_attacks", disabled=busy, help="Continuous mode only.")
+    controls[4].slider("Events per second", MIN_RATE, MAX_RATE, DEFAULT_RATE, 1.0, key="live_rate", disabled=busy)
+    if st.session_state.get("live_error"):
+        st.error(st.session_state["live_error"])
+
+    buttons = st.columns(5)
+    buttons[0].button("Start", on_click=live_start, disabled=busy, key="live_start", type="primary")
+    buttons[1].button("Pause", on_click=live_action, args=("pause",), disabled=state != "running", key="live_pause")
+    buttons[2].button("Resume", on_click=live_action, args=("resume",), disabled=state != "paused", key="live_resume")
+    buttons[3].button("Stop", on_click=live_action, args=("stop",), disabled=state not in ("running", "paused"), key="live_stop")
+    buttons[4].button("Reset", on_click=live_action, args=("reset",), disabled=not busy, key="live_reset")
+
+    if service is None:
+        st.info("No simulation is running. Choose a mode and press Start.")
+        return
+    st.markdown(f"**Status: {state.upper()}** · {summary['message']}")
+    if state == "error":
+        st.error(summary["error"])
+    if state == "completed":
+        st.caption("Stopped or finished. Press Reset to start a new run.")
+
+    row = st.columns(6)
+    row[0].metric("Released", summary["released"])
+    row[1].metric("Processed", summary["processed"])
+    row[2].metric("Pending", summary["pending"])
+    row[3].metric("Simulated time", summary["simulated_time"][11:19] + " UTC" if summary["simulated_time"] else "—")
+    row[4].metric("Elapsed", f"{summary['elapsed_seconds']:.0f} s")
+    row[5].metric("Effective rate", f"{summary['effective_rate']:g} /s", help=f"Configured {summary['configured_rate']:g} /s")
+    counts = st.columns(5)
+    counts[0].metric("Rule alerts", summary["rule_alerts"])
+    counts[1].metric("Open cases", summary["cases_open"], help=f"Cases whose evidence is still in the {summary['retention_hours']:g} h window.")
+    counts[2].metric("Investigations", summary["investigations_completed"])
+    counts[3].metric("Tool calls", summary["tool_calls"], help=f"Errors: {summary['tool_errors']}")
+    counts[4].metric("ML-only not investigated", summary["ml_only_not_investigated"], help="Session budget for ML-only investigations reached.")
+    st.caption(f"Agents: {summary['agent_mode']} ({summary['provider_id']}). Simulation {summary['simulation_id']}.")
+
+    st.markdown("**Live event stream** (latest first, observable fields only)")
+    st.dataframe(list(reversed(service.recent_events())), use_container_width=True, hide_index=True)
+    st.markdown("**Recent alerts**")
+    st.dataframe(service.alerts()[:50], use_container_width=True, hide_index=True)
+    st.markdown("**Cases**")
+    cases = service.cases()
+    st.dataframe(cases, use_container_width=True, hide_index=True)
+    if cases:
+        chosen = st.selectbox("Inspect case", [case["case_id"] for case in cases], key="live_case")
+        st.json(live_case_detail(service, chosen), expanded=False)
+    st.markdown("**Investigation activity**")
+    st.dataframe(service.activity()[:100], use_container_width=True, hide_index=True)
+    with st.expander("Observability"):
+        st.json(summary, expanded=False)
 
 
 st.set_page_config(page_title="Login-log anomaly explorer", layout="wide")
@@ -127,8 +233,8 @@ except ValueError as error:
     st.error(f"Configuration rejected: {error}")
     st.stop()
 
-tab_generate, tab_detect, tab_alerts, tab_eval, tab_agentic, tab_lab = st.tabs(
-    ["Generate", "Detectors", "Alerts", "Evaluation (labels)", "Investigations", "Threat Lab (labels)"]
+tab_generate, tab_live, tab_detect, tab_alerts, tab_eval, tab_agentic, tab_lab = st.tabs(
+    ["Generate", "SOC Live", "Detectors", "Alerts", "Evaluation (labels)", "Investigations", "Threat Lab (labels)"]
 )
 
 try:
@@ -138,9 +244,10 @@ except ValueError as error:
     st.error(f"Generation rejected: {error}")
     st.stop()
 
-alerts = alerts_cached(session)
+workflow = workflow_cached(session)
+alerts = list(workflow.rule_alerts)
 model_info = baseline_model()
-flagged = ml_flags_cached(session)
+flagged = {signal.event_id: 1 for signal in workflow.ml_positive_signals}
 
 with tab_generate:
     st.write(f"{len(dataset.events)} events, manifest seed {dataset.manifest.seed}, generator {dataset.manifest.generator_version}.")
@@ -158,6 +265,9 @@ with tab_generate:
         ],
         use_container_width=True,
     )
+
+with tab_live:
+    live_panel()
 
 with tab_detect:
     st.subheader("Rule detector")
@@ -195,10 +305,16 @@ with tab_eval:
 with tab_agentic:
     st.subheader("Alert investigations")
     st.info(
-        "Pipeline: **rule alerts → deterministic investigator → agentic evaluator**. "
-        "The investigator is rule-based (no LLM) and reads observable events only through read-only tools. "
-        f"ML flags ({sum(flagged.values())} events) are **not investigated**: there is no ML-to-investigator integration yet."
+        "Pipeline: **rules + ML signals → provenance-bound cases → mock bounded investigator → deterministic reviewer**. "
+        "The native rule investigator remains the baseline below. Mock mode is local and does not call an LLM."
     )
+    st.subheader("Case workbench · label-free runtime")
+    st.caption(f"{len(workflow.cases)} cases · mode: mock · dataset {workflow.dataset_id[:18]}…")
+    st.dataframe(case_rows(workflow), use_container_width=True, hide_index=True)
+    if workflow.cases:
+        chosen_case = st.selectbox("Inspect case", [case.case_id for case in workflow.cases], key="agentic_case")
+        st.json(case_detail(workflow, chosen_case), expanded=False)
+    st.subheader("Native rule-alert baseline")
     investigations = investigations_cached(session)
     summary = investigation_summary(investigations)
 
@@ -279,9 +395,9 @@ with tab_agentic:
         st.caption("Design and contracts: docs/agentic-evaluators.md")
 
 with tab_lab:
-    # Fixed scenario catalog on fixed Threat Lab seeds (not the sidebar dataset). Detection and scoring only.
+    # Fixed scenario catalog on fixed Threat Lab seeds (not the sidebar dataset).
     st.warning("Scenario results use ground-truth labels for scoring. Detectors never read them.")
-    st.info("Alerts from these scenarios are not sent to the investigator yet. Only the sidebar dataset is investigated.")
+    st.info("Each scenario runs the same label-free workflow. Labels score results only after runtime cases and investigations complete.")
     lab = lab_cached()
     st.subheader("Scenario catalog")
     st.dataframe(catalog_rows(build_catalog()), use_container_width=True, hide_index=True)
@@ -291,6 +407,15 @@ with tab_lab:
         "with no malicious event. These are different counts."
     )
     st.dataframe(lab_comparison_rows(lab), use_container_width=True, hide_index=True)
+
+    st.subheader("Mock scenario proposal")
+    st.caption("A mock scenario agent proposes a fixed-schema spec. It is validated before it runs; no code is executed.")
+    try:
+        proposed = proposal_cached()
+    except ScenarioProposalError as error:
+        st.error(f"Proposal rejected: {error}")
+    else:
+        st.dataframe(lab_comparison_rows(proposed), use_container_width=True, hide_index=True)
 
     chosen_scenario = st.selectbox("Scenario", [item["scenario"]["scenario_id"] for item in lab["scenarios"]], key="lab_scenario")
     scenario = next(item for item in lab["scenarios"] if item["scenario"]["scenario_id"] == chosen_scenario)

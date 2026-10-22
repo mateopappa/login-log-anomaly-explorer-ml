@@ -7,7 +7,7 @@ empty. The tools read events and the investigation input only, never ground trut
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -135,7 +135,7 @@ def get_alert_evidence(ctx: ToolContext, alert_id: str) -> ToolOutcome:
     return _outcome("get_alert_evidence", args, ok=True, rows=[row])
 
 
-TOOLS = {
+TOOLS: dict[str, Callable[..., ToolOutcome]] = {
     "get_account_events": get_account_events,
     "get_auth_history": get_auth_history,
     "get_ip_timeline": get_ip_timeline,

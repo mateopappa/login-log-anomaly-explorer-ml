@@ -82,6 +82,17 @@ def test_alerts_without_malicious_events_are_counted_per_rule(result: dict[str, 
         assert isinstance(eval_set["alerts_without_malicious_events_by_rule_and_decoy"], dict)  # type: ignore[index]
 
 
+def test_each_evaluation_set_reports_workflow_detector_and_investigation_results_per_seed(result: dict[str, object]) -> None:
+    for eval_set in result["evaluation_sets"]:  # type: ignore[union-attr]
+        assert set(eval_set["investigation"]) >= {"alerts", "investigated", "correct", "incorrect", "inconclusive"}  # type: ignore[index]
+        assert set(eval_set["case_investigation"]) >= {"cases", "correct", "incorrect", "inconclusive"}  # type: ignore[index]
+        for dataset in eval_set["datasets"]:  # type: ignore[index]
+            workflow = dataset["workflow"]
+            assert set(workflow["detectors"]) == {"rules", "ml"}
+            assert set(workflow["investigation"]) >= {"alerts", "investigated", "correct", "incorrect", "inconclusive"}
+            assert set(workflow["case_investigation"]) >= {"cases", "correct", "incorrect", "inconclusive"}
+
+
 def test_result_is_reproducible_across_runs(result: dict[str, object]) -> None:
     assert run_experiment() == result
 

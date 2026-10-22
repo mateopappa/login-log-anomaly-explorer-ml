@@ -14,7 +14,13 @@ This document describes the agentic part of the project. Read the status table f
 | Investigation contracts and tool policy | Implemented as data types and constants | `src/login_anomaly/agentic/contracts.py` |
 | Agentic Evaluator (scoring of a result) | Implemented, tested on **deterministic fixtures** | `src/login_anomaly/evaluation/agentic.py` |
 | Deterministic investigator (rule-based stand-in, no LLM) | Implemented, tested; wired to the agentic evaluator | `src/login_anomaly/agentic/investigator.py`, `src/login_anomaly/evaluation/investigation.py` |
-| Agentic Investigator (LLM that investigates) | **Designed only. Not implemented.** | none |
+| Agentic Investigator (LLM that investigates) | **Designed only. Not implemented. No provider or API key is configured.** The loop accepts any object that satisfies `InvestigatorProvider`. | none |
+| Shared label-free runtime workflow (generate → detect → cases → investigate → review) | Implemented, tested | `src/login_anomaly/workflow.py` |
+| Case correlation (rule alerts + ML signals, exact event-id match) | Implemented, tested | `src/login_anomaly/correlation.py`, `src/login_anomaly/agentic/cases.py` |
+| Case Investigator (bounded loop, structured actions) | Implemented, tested on the **deterministic mock provider** (`mode: mock`) only | `src/login_anomaly/agentic/case_investigator.py`, `src/login_anomaly/agentic/provider.py` |
+| Case Reviewer (runtime evaluator, no labels) | Implemented, tested; rule-based checks, not a model judgment | `src/login_anomaly/agentic/reviewer.py` |
+| Offline workflow evaluation (labels, after the run) | Implemented, tested | `src/login_anomaly/evaluation/workflow.py` |
+| Scenario Generator Agent (proposal schema) | Implemented, tested on the **mock provider** only; proposals are validated and never executed as code | `src/login_anomaly/threat_lab/proposals.py` |
 | Read-only investigation tools (implementations) | Implemented, tested, over in-memory observable events (no database) | `src/login_anomaly/agentic/tools.py` |
 
 What the tests show: the contracts validate, the tool policy classifies calls, and the evaluator scores fixture results correctly. What the tests do **not** show: that any model reasons well. No LLM is called anywhere in the repository, and no API cost has been incurred by this work.
@@ -43,8 +49,8 @@ flowchart LR
 
     ALERTS -- "InvestigationInput" --> INV
 
-    subgraph Investigation["Future: investigator boundary (not implemented)"]
-        INV["Agentic Investigator<br/>(future LLM)"]
+    subgraph Investigation["Investigation: rule-alert investigator; LLM not implemented"]
+        INV["Investigator<br/>(deterministic; case loop uses a mock provider)"]
         TOOLS["Read-only tools<br/>get_account_events, get_auth_history,<br/>get_ip_timeline, get_geo_context,<br/>get_alert_evidence"]
         INV <-- "ToolCallRecord<br/>read-only" --> TOOLS
         TOOLS --> EVT

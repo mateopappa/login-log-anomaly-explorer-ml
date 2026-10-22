@@ -23,8 +23,11 @@ def test_investigations_tab_shows_real_investigations_and_labelled_fixtures() ->
     assert int(metrics["Rule alerts"]) > 0
     assert metrics["Investigated"] == metrics["Rule alerts"]
     assert "Scored" in metrics  # evaluation shown by default, marked as using labels
-    assert any("not investigated" in i.value for i in at.info)  # ML flags are not presented as investigated
+    subheaders = [h.value for h in at.subheader]
+    assert "Case workbench · label-free runtime" in subheaders  # rule and ML cases share one workflow
     captions = [c.value for c in at.caption]
+    assert any("mode: mock" in text for text in captions)  # execution mode is explicit
+    assert any(text.startswith("Simulated") for text in captions)  # fixtures kept, labelled as simulated
     assert any(text.startswith("Simulated") for text in captions)  # fixtures kept, labelled as simulated
 
 
@@ -72,6 +75,7 @@ def test_threat_lab_tab_shows_the_catalog_and_rules_versus_ml() -> None:
     assert not at.exception, [e.value for e in at.exception]
     headers = [h.value for h in at.subheader]
     assert "Scenario catalog" in headers and "Rules versus ML, per scenario" in headers
+    assert "Mock scenario proposal" in headers
     assert any("use ground-truth labels for scoring" in w.value for w in at.warning)
     assert any(f.label == "Scenario" for f in at.selectbox)
     assert any("nominal_control" in df.value.to_string() for df in at.dataframe)

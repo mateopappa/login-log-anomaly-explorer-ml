@@ -31,17 +31,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from login_anomaly.detection.rules import detect
+from login_anomaly.evaluation.workflow import CaseInvestigationQuality, InvestigationQuality, evaluate_workflow
 from login_anomaly.evaluation.metrics import ConfusionMatrix, confusion, f1, precision, recall
 from login_anomaly.ml.features import feature_matrix
-from login_anomaly.ml.model import predict_malicious, train_model
+from login_anomaly.ml.model import train_model
 from login_anomaly.simulation.config import GeneratorConfig
-from login_anomaly.simulation.generator import GeneratedDataset, generate_with_truth
+from login_anomaly.simulation.generator import EventDataset, GeneratedDataset, generate_with_truth
 from login_anomaly.simulation.ground_truth import ScenarioType
 from login_anomaly.simulation.scenarios import HARD_RANGES, NOMINAL_RANGES, ScenarioPlan, ScenarioRanges
+from login_anomaly.workflow import ModelRunMetadata, run_detection_workflow
 
 TRAIN_SEEDS: tuple[int, ...] = (101, 102, 103, 104)
 MODEL_SEED = 7
+MODEL_RUN_ID = "rf-baseline-7"
 PLAN = ScenarioPlan(
     bruteforce_campaigns=3,
     password_spraying_campaigns=2,
@@ -135,6 +137,30 @@ def _sum(matrices: list[ConfusionMatrix]) -> ConfusionMatrix:
     )
 
 
+def _metric_row(matrix: ConfusionMatrix) -> dict[str, object]:
+    return {
+        "confusion": asdict(matrix),
+        "precision": round(precision(matrix), 4),
+        "recall": round(recall(matrix), 4),
+        "f1": round(f1(matrix), 4),
+        "flagged_events": matrix.tp + matrix.fp,
+    }
+
+
+def _sum_investigations(items: list[InvestigationQuality]) -> dict[str, int]:
+    return {
+        field: sum(getattr(item, field) for item in items)
+        for field in InvestigationQuality.__dataclass_fields__
+    }
+
+
+def _sum_case_investigations(items: list[CaseInvestigationQuality]) -> dict[str, int]:
+    return {
+        field: sum(getattr(item, field) for item in items)
+        for field in CaseInvestigationQuality.__dataclass_fields__
+    }
+
+
 def train_baseline(train_seeds: tuple[int, ...] = TRAIN_SEEDS) -> tuple[object, int, int]:
     """Train the ML baseline on the training seeds. Returns the model and its row/positive counts."""
     train_x: list[list[float]] = []
@@ -151,15 +177,23 @@ def _evaluate_set(eval_set: EvalSet, model: object) -> dict[str, Any]:
     per_seed_f1: dict[str, list[float]] = {"all_benign": [], "rules": [], "ml": []}
     scenario_hits: dict[str, dict[str, list[int]]] = {"all_benign": {}, "rules": {}, "ml": {}}
     false_positive_alerts: Counter[str] = Counter()
+    investigation_quality: list[InvestigationQuality] = []
+    case_investigation_quality: list[CaseInvestigationQuality] = []
     datasets: list[dict[str, Any]] = []
 
     for seed in eval_set.seeds:
         dataset = generate_with_truth(dataset_config(seed), eval_set.plan, eval_set.ranges)
         rows = labelled_rows(dataset)
-        alerts = detect(list(dataset.events))
-        rule_flags = {event_id for alert in alerts for event_id in alert.event_ids}
+        workflow = run_detection_workflow(
+            EventDataset(dataset.events, dataset.manifest), model, ModelRunMetadata(MODEL_RUN_ID)  # type: ignore[arg-type]
+        )
+        workflow_evaluation = evaluate_workflow(workflow, dataset.ground_truth)
+        investigation_quality.append(workflow_evaluation.investigation)
+        case_investigation_quality.append(workflow_evaluation.case_investigation)
+        rule_flags = {event_id for alert in workflow.rule_alerts for event_id in alert.event_ids}
+        ml_flags = {signal.event_id for signal in workflow.ml_positive_signals}
         malicious_ids = {event_id for event_id, label in zip(rows.ids, rows.labels) if label}
-        for alert in alerts:
+        for alert in workflow.rule_alerts:
             if not set(alert.event_ids) & malicious_ids:
                 kinds = sorted({dataset.decoy_kinds[e] for e in alert.event_ids if e in dataset.decoy_kinds})
                 false_positive_alerts[f"{alert.rule_id}/{','.join(kinds) or 'background'}"] += 1
@@ -167,7 +201,7 @@ def _evaluate_set(eval_set: EvalSet, model: object) -> dict[str, Any]:
         predictions = {
             "all_benign": [0] * len(rows.ids),
             "rules": [1 if event_id in rule_flags else 0 for event_id in rows.ids],
-            "ml": predict_malicious(model, rows.features),  # type: ignore[arg-type]
+            "ml": [1 if event_id in ml_flags else 0 for event_id in rows.ids],
         }
         for method, predicted in predictions.items():
             matrix = confusion(rows.labels, predicted)
@@ -189,6 +223,22 @@ def _evaluate_set(eval_set: EvalSet, model: object) -> dict[str, Any]:
                     if dataset.ground_truth.label_for(e.event_id).campaign_id is not None
                 }),
                 "class_distribution": {str(k): v for k, v in sorted(Counter(rows.labels).items())},
+                "workflow": {
+                    "dataset_id": workflow.dataset_id,
+                    "rule_alerts": len(workflow.rule_alerts),
+                    "ml_positive_events": len(workflow.ml_positive_signals),
+                    "cases": {
+                        "rule_backed": sum(case.case_kind == "rule_backed" for case in workflow.cases),
+                        "ml_only": sum(case.case_kind == "ml_only" for case in workflow.cases),
+                        "execution_mode": workflow.case_investigations[0].mode if workflow.case_investigations else "mock",
+                    },
+                    "detectors": {
+                        "rules": _metric_row(workflow_evaluation.rules),
+                        "ml": _metric_row(workflow_evaluation.ml),
+                    },
+                    "investigation": asdict(workflow_evaluation.investigation),
+                    "case_investigation": asdict(workflow_evaluation.case_investigation),
+                },
             }
         )
 
@@ -224,6 +274,8 @@ def _evaluate_set(eval_set: EvalSet, model: object) -> dict[str, Any]:
         "ranges_are_nominal": eval_set.ranges == NOMINAL_RANGES,
         "datasets": datasets,
         "methods": methods,
+        "investigation": _sum_investigations(investigation_quality),
+        "case_investigation": _sum_case_investigations(case_investigation_quality),
         "alerts_without_malicious_events_by_rule_and_decoy": dict(sorted(false_positive_alerts.items())),
     }
 
