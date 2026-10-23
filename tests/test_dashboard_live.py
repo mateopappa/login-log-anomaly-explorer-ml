@@ -66,3 +66,47 @@ def test_stop_ends_the_run_and_says_so() -> None:
     assert "Status: COMPLETED" in markdown_text(at)
     assert "Stopped by user" in markdown_text(at)
     assert at.button(key="live_stop").disabled is True
+
+
+def caption_text(at: AppTest) -> str:
+    return "\n".join(c.value for c in at.caption)
+
+
+def test_detector_flags_control_live_processing_configurations() -> None:
+    # 1. Ingestion baseline: neither detector enabled
+    at = AppTest.from_file(str(APP), default_timeout=120).run()
+    at.checkbox(key="live_enable_rules").uncheck().run()
+    at.checkbox(key="live_enable_ml").uncheck().run()
+    assert "Neither detector (Ingestion baseline" in caption_text(at)
+    at.button(key="live_start").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert "Status: RUNNING" in markdown_text(at)
+    assert "Rules: `DISABLED` · ML: `DISABLED`" in caption_text(at)
+    rule_alert_values = [m.value for m in at.metric if m.label == "Rule alerts"]
+    assert "0" in rule_alert_values
+
+    # 2. Rules only
+    at2 = AppTest.from_file(str(APP), default_timeout=120).run()
+    at2.checkbox(key="live_enable_ml").uncheck().run()
+    assert "Rules only" in caption_text(at2)
+    at2.button(key="live_start").click().run()
+    assert not at2.exception, [e.value for e in at2.exception]
+    assert "Rules: `ACTIVE` · ML: `DISABLED`" in caption_text(at2)
+
+    # 3. ML only
+    at3 = AppTest.from_file(str(APP), default_timeout=120).run()
+    at3.checkbox(key="live_enable_rules").uncheck().run()
+    assert "ML only" in caption_text(at3)
+    at3.button(key="live_start").click().run()
+    assert not at3.exception, [e.value for e in at3.exception]
+    assert "Rules: `DISABLED` · ML: `ACTIVE`" in caption_text(at3)
+
+
+def test_live_benchmark_runs_4_way_comparison() -> None:
+    at = AppTest.from_file(str(APP), default_timeout=120).run()
+    at.button(key="live_run_benchmark").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("Side-by-Side Results for Scenario" in m.value for m in at.markdown)
+    # Check that the comparison dataframe is rendered
+    df_values = [df.value.to_string() for df in at.dataframe]
+    assert any("Rules + ML" in s and "Neither detector" in s for s in df_values)

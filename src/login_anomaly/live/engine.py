@@ -72,6 +72,8 @@ class LiveConfig:
     scenario: str = "Mixed campaigns"
     attacks: frozenset[str] = frozenset(ATTACK_FAMILIES)
     events_per_second: float = DEFAULT_RATE
+    enable_rules: bool = True
+    enable_ml: bool = True
 
     def __post_init__(self) -> None:
         if self.mode not in ("replay", "continuous"):
@@ -84,6 +86,10 @@ class LiveConfig:
         rate = self.events_per_second
         if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not MIN_RATE <= rate <= MAX_RATE:
             raise ValueError(f"events_per_second must be a number from {MIN_RATE:g} to {MAX_RATE:g}")
+        if not isinstance(self.enable_rules, bool):
+            raise ValueError("enable_rules must be a boolean")
+        if not isinstance(self.enable_ml, bool):
+            raise ValueError("enable_ml must be a boolean")
 
 
 @dataclass(frozen=True)
@@ -206,6 +212,13 @@ class SimulationService:
             "scenario": self.config.scenario if self.config.mode == "replay" else None,
             "attacks": sorted(self.config.attacks) if self.config.mode == "continuous" else None,
             "configured_rate": self.config.events_per_second,
+            "enable_rules": self.config.enable_rules,
+            "enable_ml": self.config.enable_ml,
+            "detector_mode": (
+                "rules_and_ml"
+                if self.config.enable_rules and self.config.enable_ml
+                else ("rules_only" if self.config.enable_rules else ("ml_only" if self.config.enable_ml else "none"))
+            ),
             "effective_rate": round(self._released / elapsed, 2) if elapsed > 0 else 0.0,
             "elapsed_seconds": round(elapsed, 1),
             "generated": self._source.generated() if self._source else 0,
@@ -379,9 +392,13 @@ class SimulationService:
 
         # Trim first: every later step may only refer to events that are still retained.
         self._trim()
-        self._score(batch)
-        self._merge_incidents(detect(self._buffer))
-        cases = correlate_signals(self._buffer, self._correlation_alerts(), list(self._ml_signals.values()), dataset_id=self.simulation_id)
+        if self.config.enable_ml:
+            self._score(batch)
+        if self.config.enable_rules:
+            self._merge_incidents(detect(self._buffer))
+        alerts = self._correlation_alerts() if self.config.enable_rules else []
+        ml_signals = list(self._ml_signals.values()) if self.config.enable_ml else []
+        cases = correlate_signals(self._buffer, alerts, ml_signals, dataset_id=self.simulation_id)
         self._investigate(cases)
         self._processed += len(batch)
         self._latency_last_ms = (self._clock() - started) * 1000
@@ -507,6 +524,13 @@ def _observable_row(event: AuthEvent) -> dict[str, Any]:
 
 
 def _simulation_id(config: LiveConfig) -> str:
-    payload = {"mode": config.mode, "seed": config.seed, "scenario": config.scenario, "attacks": sorted(config.attacks)}
+    payload = {
+        "mode": config.mode,
+        "seed": config.seed,
+        "scenario": config.scenario,
+        "attacks": sorted(config.attacks),
+        "enable_rules": config.enable_rules,
+        "enable_ml": config.enable_ml,
+    }
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
     return f"sim-{digest[:12]}"

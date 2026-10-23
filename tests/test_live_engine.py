@@ -349,3 +349,81 @@ def test_a_growing_campaign_is_one_incident_not_one_per_new_event() -> None:
     service.start()
     run_to_end(service, clock)
     assert service.summary()["rule_alerts"] == 2
+
+
+# --- detector flags -----------------------------------------------------------
+
+
+def test_detector_flags_validation() -> None:
+    with pytest.raises(ValueError, match="enable_rules must be a boolean"):
+        LiveConfig("replay", seed=1, enable_rules="yes")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="enable_ml must be a boolean"):
+        LiveConfig("replay", seed=1, enable_ml=1)  # type: ignore[arg-type]
+
+
+def test_detector_flags_affect_simulation_id() -> None:
+    both = LiveConfig("replay", seed=1, enable_rules=True, enable_ml=True)
+    rules_only = LiveConfig("replay", seed=1, enable_rules=True, enable_ml=False)
+    ml_only = LiveConfig("replay", seed=1, enable_rules=False, enable_ml=True)
+    none = LiveConfig("replay", seed=1, enable_rules=False, enable_ml=False)
+
+    ids = {engine_module._simulation_id(c) for c in (both, rules_only, ml_only, none)}
+    assert len(ids) == 4
+
+
+def test_rules_only_mode_disables_ml_scoring() -> None:
+    clock = FakeClock()
+    service = SimulationService(
+        LiveConfig("replay", seed=31, scenario="Mixed campaigns", enable_rules=True, enable_ml=False),
+        FlagEverything(),
+        clock=clock,
+    )
+    service.start()
+    run_to_end(service, clock)
+    summary = service.summary()
+    assert summary["enable_rules"] is True
+    assert summary["enable_ml"] is False
+    assert summary["detector_mode"] == "rules_only"
+    assert summary["rule_alerts"] > 0
+    assert summary["ml_positive_events"] == 0
+    assert all(c["kind"] == "rule_backed" for c in service.cases())
+
+
+def test_ml_only_mode_disables_rule_detection() -> None:
+    clock = FakeClock()
+    service = SimulationService(
+        LiveConfig("replay", seed=31, scenario="Mixed campaigns", enable_rules=False, enable_ml=True),
+        FlagEverything(),
+        clock=clock,
+    )
+    service.start()
+    run_to_end(service, clock)
+    summary = service.summary()
+    assert summary["enable_rules"] is False
+    assert summary["enable_ml"] is True
+    assert summary["detector_mode"] == "ml_only"
+    assert summary["rule_alerts"] == 0
+    assert summary["ml_positive_events"] > 0
+    assert all(c["kind"] == "ml_only" for c in service.cases())
+
+
+def test_no_detector_mode_serves_as_ingestion_baseline() -> None:
+    clock = FakeClock()
+    service = SimulationService(
+        LiveConfig("replay", seed=31, scenario="Mixed campaigns", enable_rules=False, enable_ml=False),
+        FlagEverything(),
+        clock=clock,
+    )
+    service.start()
+    run_to_end(service, clock)
+    summary = service.summary()
+    assert summary["enable_rules"] is False
+    assert summary["enable_ml"] is False
+    assert summary["detector_mode"] == "none"
+    assert summary["rule_alerts"] == 0
+    assert summary["ml_positive_events"] == 0
+    assert summary["cases_total"] == 0
+    assert summary["released"] == 1500
+    assert summary["processed"] == 1500
+    assert len(service.cases()) == 0
+    assert len(service.alerts()) == 0
