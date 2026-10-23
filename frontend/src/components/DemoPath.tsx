@@ -12,40 +12,51 @@ type Props = {
   pitch: string;
   steps: DemoStep[];
   talkingPoints: string[];
+  presenterRoute?: string;
+  primaryAction?: { label: string; onClick: () => void; busy?: boolean };
 };
 
-export function DemoPath({ pitch, steps, talkingPoints }: Props) {
+export function DemoPath({ pitch, steps, talkingPoints, presenterRoute, primaryAction }: Props) {
   return (
     <section className="panel stack demo-path">
-      <div>
-        <h2 style={{ margin: 0, fontSize: "1rem" }}>Demo path</h2>
-        <p style={{ margin: "0.4rem 0 0" }}>{pitch}</p>
+      <div className="demo-path-top">
+        <div>
+          <p className="eyebrow">Demo path</p>
+          <h2 className="demo-pitch">{pitch}</h2>
+        </div>
+        <div className="hero-actions">
+          {presenterRoute && (
+            <Link className="btn btn-lg" to={presenterRoute}>
+              Presenter
+            </Link>
+          )}
+          {primaryAction && (
+            <button className="btn primary btn-lg" onClick={primaryAction.onClick} disabled={primaryAction.busy}>
+              {primaryAction.busy ? "Seeding…" : primaryAction.label}
+            </button>
+          )}
+        </div>
       </div>
-      <ol className="demo-steps">
-        {steps.map((step) => (
+
+      <ol className="demo-steps-row">
+        {steps.map((step, index) => (
           <li key={step.id}>
-            <div className="demo-step-head">
-              <strong>{step.title}</strong>
-              <Link className="btn" to={step.route}>
-                Go
-              </Link>
-            </div>
-            <p className="muted" style={{ margin: "0.25rem 0" }}>
-              <span className="mono">{step.action}</span>
-            </p>
-            <p className="muted" style={{ margin: 0, fontSize: "0.85rem" }}>
-              {step.why}
-            </p>
+            <span className="demo-num">{index + 1}</span>
+            <strong>{step.title}</strong>
+            <span className="muted demo-why">{step.why}</span>
+            <Link className="btn btn-lg demo-go" to={step.route}>
+              {step.action}
+            </Link>
           </li>
         ))}
       </ol>
-      <div>
-        <h3 style={{ margin: "0 0 0.4rem", fontSize: "0.9rem" }}>Talking points</h3>
-        <ul className="muted" style={{ margin: 0, paddingLeft: "1.1rem", fontSize: "0.85rem" }}>
-          {talkingPoints.map((point) => (
-            <li key={point}>{point}</li>
-          ))}
-        </ul>
+
+      <div className="chip-row" aria-label="Talking points">
+        {talkingPoints.map((point) => (
+          <span key={point} className="chip">
+            {point}
+          </span>
+        ))}
       </div>
     </section>
   );

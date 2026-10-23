@@ -55,11 +55,13 @@ def upsert_dataset(session: Session, dataset_id: str, seed: int, config: dict[st
 
 
 def replace_events(session: Session, dataset_id: str, events: tuple[AuthEvent, ...]) -> None:
-    existing = session.scalars(select(EventRow).where(EventRow.dataset_id == dataset_id)).all()
-    for row in existing:
-        session.delete(row)
+    """Replace all events for a dataset. Dedupes by event_id (last write wins)."""
+    from sqlalchemy import delete
+
+    session.execute(delete(EventRow).where(EventRow.dataset_id == dataset_id))
     session.flush()
-    for event in events:
+    by_id = {event.event_id: event for event in events}
+    for event in by_id.values():
         session.add(
             EventRow(
                 dataset_id=dataset_id,

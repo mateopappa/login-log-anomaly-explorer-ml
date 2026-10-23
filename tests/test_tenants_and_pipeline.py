@@ -70,11 +70,22 @@ def test_product_and_pipeline_endpoints(client: TestClient) -> None:
     assert demo.status_code == 200
     body = demo.json()
     assert len(body["steps"]) >= 5
-    assert body["steps"][0]["route"] == "/"
+    assert body["steps"][0]["title"] == "Seed"
+    assert "seed=42" in body["steps"][0]["route"]
+    assert body.get("presenter_route") == "/story"
+    assert "→" in body["pitch"] or "detect" in body["pitch"].lower()
+
+    story = client.get("/api/v1/product/story")
+    assert story.status_code == 200
+    beats = story.json()["beats"]
+    assert len(beats) >= 8
+    assert beats[0]["id"] == "hook"
+    assert beats[-1]["id"] == "close"
 
     trust = client.get("/api/v1/product/trust")
     assert trust.status_code == 200
     assert len(trust.json()["bullets"]) >= 4
+    assert all(len(item["text"]) < 80 for item in trust.json()["bullets"])
 
     tenants = client.get("/api/v1/product/tenants")
     assert tenants.status_code == 200

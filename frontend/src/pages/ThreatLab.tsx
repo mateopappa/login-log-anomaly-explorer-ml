@@ -36,12 +36,13 @@ export function ThreatLab() {
 
   return (
     <div className="stack">
-      <header className="page-header">
-        <h1>Threat Lab</h1>
-        <p>
-          Adversarial scenario catalog scored offline against ground truth. Prefer a single scenario for interactive
-          demos; the full catalog is slow by design.
-        </p>
+      <header className="page-header hero-header">
+        <div>
+          <p className="eyebrow">Adversarial eval</p>
+          <h1>Threat Lab</h1>
+          <p>Offline catalog scored against ground truth — not the live broker.</p>
+        </div>
+        <span className="pulse-badge off">Offline · no Redpanda</span>
       </header>
 
       {error && <div className="error">{error}</div>}

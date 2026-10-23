@@ -6,51 +6,13 @@ import argparse
 import json
 import os
 import sys
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Sequence
 
 from login_anomaly.detection.rules import detect
 from login_anomaly.pipeline.envelope import StreamEnvelope
+from login_anomaly.pipeline.http_metrics import start_metrics_server
 from login_anomaly.pipeline.metrics import PipelineMetrics
 from login_anomaly.tenants import TENANTS
-
-
-def _start_metrics_server(port: int) -> None:
-    try:
-        from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-    except ImportError:
-        print("worker: prometheus_client missing; /metrics disabled", flush=True)
-        return
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802
-            if self.path not in {"/metrics", "/healthz"}:
-                self.send_response(404)
-                self.end_headers()
-                return
-            if self.path == "/healthz":
-                body = b"ok"
-                self.send_response(200)
-                self.send_header("Content-Type", "text/plain")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-                return
-            payload = generate_latest()
-            self.send_response(200)
-            self.send_header("Content-Type", CONTENT_TYPE_LATEST)
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A003
-            return
-
-    server = HTTPServer(("0.0.0.0", port), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    print(f"worker: metrics on :{port}/metrics", flush=True)
 
 
 def run_consumer(
@@ -112,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     metrics = PipelineMetrics()
-    _start_metrics_server(args.metrics_port)
+    start_metrics_server(args.metrics_port, label="worker")
     topics = [tenant.topic for tenant in TENANTS]
     run_consumer(bootstrap=args.bootstrap, group_id=args.group, topics=topics, metrics=metrics)
     return 0

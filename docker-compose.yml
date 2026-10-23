@@ -126,9 +126,14 @@ services:
         "12",
         "--events",
         "120",
+        "--metrics-port",
+        "9101",
       ]
     environment:
       KAFKA_BOOTSTRAP: redpanda:9092
+      METRICS_PORT: "9101"
+    ports:
+      - "9101:9101"
     depends_on:
       redpanda-init:
         condition: service_completed_successfully
@@ -166,6 +171,7 @@ services:
       - "9090:9090"
     depends_on:
       - pipeline-worker
+      - pipeline-producer
 
   grafana:
     profiles: ["pipeline"]

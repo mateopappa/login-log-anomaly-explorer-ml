@@ -8,3 +8,9 @@ scrape_configs:
       - targets: ["pipeline-worker:9100"]
         labels:
           service: login-anomaly-worker
+
+  - job_name: pipeline-producer
+    static_configs:
+      - targets: ["pipeline-producer:9101"]
+        labels:
+          service: login-anomaly-producer

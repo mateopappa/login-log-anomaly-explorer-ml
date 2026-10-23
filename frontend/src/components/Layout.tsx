@@ -15,9 +15,12 @@ export function Layout() {
       <aside className="sidebar">
         <div className="brand">
           <strong>Login Anomaly Explorer</strong>
-          <span>Product · demo path · multi-site SOC</span>
+          <span>Detect · investigate · prove</span>
         </div>
         <nav className="nav">
+          <NavLink to="/story" className="nav-presenter">
+            Presenter
+          </NavLink>
           {links.map((link) => (
             <NavLink key={link.to} to={link.to} end={link.end} className={({ isActive }) => (isActive ? "active" : undefined)}>
               {link.label}

@@ -269,6 +269,7 @@ class SimulationService:
                 "severity": incident.severity.value,
                 "first_seen": incident.first_seen.isoformat(),
                 "events": len(incident.event_ids),
+                "event_ids": list(incident.event_ids),
                 "case_id": case_for_incident.get(incident.incident_id),
             }
             for incident in self._incidents.values()
@@ -281,6 +282,7 @@ class SimulationService:
                 "severity": "untriaged",
                 "first_seen": record.events[0]["timestamp_utc"],
                 "events": len(record.case.event_ids),
+                "event_ids": list(record.case.event_ids),
                 "case_id": record.case.case_id,
             }
             for record in self._cases.values()

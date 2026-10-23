@@ -84,29 +84,29 @@ def live_control(
 ) -> dict[str, Any]:
     action = body.action
     persisted: dict[str, int] | None = None
-    if action == "start":
-        if body.mode is None or body.seed is None:
-            raise HTTPException(status_code=400, detail="mode and seed are required to start")
-        if body.mode == "replay" and body.scenario and body.scenario not in REPLAY_SCENARIOS:
-            raise HTTPException(status_code=400, detail=f"unknown scenario: {body.scenario}")
-        config = LiveConfig(
-            mode=body.mode,
-            seed=body.seed,
-            scenario=body.scenario or "Mixed campaigns",
-            events_per_second=body.events_per_second or 5.0,
-            enable_rules=body.enable_rules,
-            enable_ml=body.enable_ml,
-        )
-        model = state.ensure_model()
-        state.live = SimulationService(config, model)
-        state.live.start()
-        repo_counts = persist_live_snapshot(session, state.live)
-        persisted = repo_counts
-    else:
-        if state.live is None:
-            raise HTTPException(status_code=409, detail="live simulation is not active")
-        service = state.live
-        try:
+    try:
+        if action == "start":
+            if body.mode is None or body.seed is None:
+                raise HTTPException(status_code=400, detail="mode and seed are required to start")
+            if body.mode == "replay" and body.scenario and body.scenario not in REPLAY_SCENARIOS:
+                raise HTTPException(status_code=400, detail=f"unknown scenario: {body.scenario}")
+            rate = 5.0 if body.events_per_second is None else float(body.events_per_second)
+            config = LiveConfig(
+                mode=body.mode,
+                seed=body.seed,
+                scenario=body.scenario or "Mixed campaigns",
+                events_per_second=rate,
+                enable_rules=body.enable_rules,
+                enable_ml=body.enable_ml,
+            )
+            model = state.ensure_model()
+            state.live = SimulationService(config, model)
+            state.live.start()
+            persisted = persist_live_snapshot(session, state.live)
+        else:
+            if state.live is None:
+                raise HTTPException(status_code=409, detail="live simulation is not active")
+            service = state.live
             if action == "pause":
                 service.pause()
             elif action == "resume":
@@ -121,8 +121,12 @@ def live_control(
             elif action == "advance":
                 service.advance()
                 persisted = persist_live_snapshot(session, service)
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — surface persist races as 409, not opaque CORS 500
+        raise HTTPException(status_code=409, detail=f"live control failed: {exc}") from exc
 
     return _snapshot(state, persisted=persisted)
 

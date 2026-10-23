@@ -76,7 +76,7 @@ export type CaseDetail = {
   priority: string;
   status: string;
   event_ids: string[];
-  signals: unknown[];
+  signals: Array<Record<string, unknown>>;
   associations: unknown[];
   events: Array<{
     event_id: string;
@@ -87,6 +87,34 @@ export type CaseDetail = {
     country_code: string;
   }>;
   investigations: InvestigationRun[];
+};
+
+export type CaseEvaluation = {
+  evaluation_id: string;
+  case_id: string;
+  run_id: string;
+  provider_id: string;
+  mode: string;
+  metrics: {
+    expected_malicious: boolean;
+    expected_verdict: string;
+    actual_verdict: string;
+    verdict_match: string;
+    verdict_correct: boolean | null;
+    malicious_event_ids: string[];
+    malicious_event_count: number;
+    event_count: number;
+    policy: {
+      unsupported_evidence: number;
+      irrelevant_evidence: number;
+      forbidden_access_attempts: number;
+      tool_limit_violations: number;
+      failed_tool_calls: number;
+      steps: number;
+      findings: string[];
+    };
+    note: string;
+  };
 };
 
 export type SocSummary = {
@@ -166,6 +194,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ provider, idempotency_key: idempotencyKey }),
     }),
+  evaluateCase: (caseId: string, runId?: string) => {
+    const query = runId ? `?run_id=${encodeURIComponent(runId)}` : "";
+    return request<CaseEvaluation>(`/api/v1/cases/${caseId}/evaluate${query}`, { method: "POST" });
+  },
   liveStatus: () => request<LiveSnapshot>("/api/v1/live/status"),
   liveControl: (body: Record<string, unknown>) =>
     request<LiveSnapshot>("/api/v1/live/control", {
@@ -185,6 +217,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
   demoPath: () => request<DemoPathResponse>("/api/v1/product/demo-path"),
+  story: () => request<StoryResponse>("/api/v1/product/story"),
   trust: () => request<TrustResponse>("/api/v1/product/trust"),
   tenants: () => request<PipelineStatus["tenants"]>("/api/v1/product/tenants"),
   pipelineStatus: () => request<PipelineStatus>("/api/v1/pipeline/status"),
@@ -203,8 +236,25 @@ export type DemoPathResponse = {
   title: string;
   pitch: string;
   audience: string;
+  presenter_route?: string;
   steps: Array<{ id: string; title: string; route: string; action: string; why: string }>;
   talking_points: string[];
+};
+
+export type StoryBeat = {
+  id: string;
+  kicker: string;
+  headline: string;
+  line: string;
+  blocks: string[];
+  cta?: { label: string; route: string };
+};
+
+export type StoryResponse = {
+  title: string;
+  subtitle: string;
+  controls: string;
+  beats: StoryBeat[];
 };
 
 export type TrustResponse = {
