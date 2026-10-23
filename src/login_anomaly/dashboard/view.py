@@ -14,6 +14,7 @@ from typing import Any
 
 from login_anomaly.agentic.contracts import MAX_STEPS, MAX_TOOL_CALLS, AgentEvaluationResult
 from login_anomaly.agentic.investigator import AlertInvestigation, investigate_alerts
+from login_anomaly.correlation import MlPositiveSignal, RuleAlertSignal
 from login_anomaly.detection.rules import Alert, detect
 from login_anomaly.ml.features import feature_matrix
 from login_anomaly.live.engine import SimulationService
@@ -164,17 +165,82 @@ def case_detail(workflow: DetectionWorkflowResult, case_id: str) -> dict[str, An
         "review": asdict(review),
     }
 
+def live_case_rows(service: SimulationService) -> list[dict[str, Any]]:
+    """Clean, scannable case overview rows for SOC Live triage."""
+    rows = []
+    for case in service.cases():
+        rows.append(
+            {
+                "Case ID": case["case_id"],
+                "Kind": "Rule-backed" if case["kind"] == "rule_backed" else "ML-only",
+                "Priority": case["priority"].replace("_", " ").upper(),
+                "Signals": case["signals"],
+                "Events": case["events"],
+                "Verdict": case["verdict"].upper() if case["verdict"] != "not investigated" else "Capped (ML budget)",
+                "Review": case["review"],
+                "Status": case["status"],
+            }
+        )
+    return rows
+
 
 def live_case_detail(service: SimulationService, case_id: str) -> dict[str, Any] | None:
     """Selected SOC Live case: the events it was built from, plus its investigation and review if run."""
     record = service.case_record(case_id)
     if record is None:
         return None
+
+    signals_detail = []
+    for signal in record.case.signals:
+        if isinstance(signal, RuleAlertSignal):
+            signals_detail.append(
+                {
+                    "signal_id": signal.signal_id,
+                    "source": "Rule detector",
+                    "rule_id": signal.rule_id,
+                    "alert_id": signal.alert_id,
+                    "severity": signal.severity,
+                    "explanation": signal.explanation,
+                    "evidence": list(signal.evidence),
+                    "event_ids": list(signal.event_ids),
+                }
+            )
+        elif isinstance(signal, MlPositiveSignal):
+            signals_detail.append(
+                {
+                    "signal_id": signal.signal_id,
+                    "source": "ML detector (RF)",
+                    "rule_id": "—",
+                    "alert_id": "—",
+                    "severity": "medium",
+                    "explanation": f"ML anomaly flagged (prob >= {signal.threshold:g})",
+                    "score": signal.score,
+                    "threshold": signal.threshold,
+                    "event_ids": [signal.event_id],
+                }
+            )
+
+    associations = [
+        {
+            "ml_signal_id": a.ml_signal_id,
+            "rule_signal_id": a.rule_signal_id,
+            "event_id": a.event_id,
+            "basis": a.basis,
+            "candidate_rule_signal_ids": list(a.candidate_rule_signal_ids),
+        }
+        for a in record.case.associations
+    ]
+
+    in_window = case_id in getattr(service, "_active_case_ids", set())
+
     detail: dict[str, Any] = {
         "case_id": case_id,
         "kind": record.case.case_kind,
         "priority": record.case.priority_hint,
         "signals": len(record.case.signals),
+        "signals_detail": signals_detail,
+        "associations": associations,
+        "in_window": in_window,
         "events": list(record.events),
     }
     if record.run is None or record.review is None:

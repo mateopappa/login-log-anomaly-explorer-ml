@@ -21,12 +21,14 @@ from login_anomaly.dashboard.view import (
     investigation_rows,
     investigation_summary,
     live_case_detail,
+    live_case_rows,
     related_events,
     scenario_detail,
     workflow_for,
 )
 from login_anomaly.evaluation.experiment import train_baseline
 from login_anomaly.evaluation.investigation import evaluate_investigations
+from login_anomaly.evaluation.live import compare_replay_detector_configurations, evaluate_live_replay
 from login_anomaly.evaluation.panel import comparison_rows, truth_for
 from login_anomaly.evaluation.threat_lab import comparison_rows as lab_comparison_rows
 from login_anomaly.evaluation.threat_lab import run_lab, run_proposal
@@ -113,6 +115,8 @@ def live_start() -> None:
             scenario=state["live_scenario"],
             attacks=frozenset(state["live_attacks"]),
             events_per_second=float(state["live_rate"]),
+            enable_rules=bool(state.get("live_enable_rules", True)),
+            enable_ml=bool(state.get("live_enable_ml", True)),
         )
     except ValueError as error:
         state["live_error"] = f"Configuration rejected: {error}"
@@ -126,8 +130,188 @@ def live_start() -> None:
 def live_action(name: str) -> None:
     if name == "reset":
         st.session_state[LIVE_KEY] = None  # a fresh IDLE session on the next Start
+        st.session_state.pop("live_current_eval", None)
     elif st.session_state.get(LIVE_KEY) is not None:
         getattr(st.session_state[LIVE_KEY], name)()
+
+
+def _render_case_dossier(detail: dict[str, Any]) -> None:
+    """Evidence-first progressive disclosure case dossier without raw json default."""
+    st.markdown(f"#### Case Dossier: `{detail['case_id']}`")
+
+    meta_cols = st.columns(4)
+    meta_cols[0].metric("Origin", "Rule-backed" if detail["kind"] == "rule_backed" else "ML-only")
+    meta_cols[1].metric("Priority", detail["priority"].replace("_", " ").upper())
+    meta_cols[2].metric("Signals", detail["signals"])
+    meta_cols[3].metric("Context Window", "In 2h window" if detail.get("in_window") else "Expired")
+
+    st.markdown("**1. Contributing Detector Signals & Correlation Provenance**")
+    if detail.get("signals_detail"):
+        st.dataframe(detail["signals_detail"], use_container_width=True, hide_index=True)
+    if detail.get("associations"):
+        for a in detail["associations"]:
+            st.caption(
+                f"• Association basis: `{a['basis']}` · ML Signal `{a['ml_signal_id']}` correlated with "
+                f"Rule Signal `{a['rule_signal_id'] or 'none'}` on Event `{a['event_id']}`"
+            )
+
+    st.markdown("**2. Observable Authentication Events (Supporting Evidence)**")
+    if detail.get("events"):
+        st.dataframe(detail["events"], use_container_width=True, hide_index=True)
+
+    st.markdown("**3. Investigation Findings (Deterministic Mock Agent)**")
+    if "verdict" in detail:
+        v_col1, v_col2 = st.columns([1, 3])
+        v_col1.metric("Verdict", detail["verdict"].upper(), delta=f"Confidence {detail['confidence']:.2f}")
+        v_col2.info(f"**Reasoning:** {detail['justification']}")
+
+        if detail.get("evidence"):
+            st.markdown("**Verified Supporting Observations:**")
+            for e in detail["evidence"]:
+                st.write(f"- `{e.get('field', 'fact')}`: {e.get('observation', '')}")
+
+        if detail.get("tool_calls"):
+            with st.expander("Investigation Tool Execution Trace", expanded=False):
+                tool_rows = [
+                    {
+                        "Step": idx,
+                        "Tool": call.get("tool_name"),
+                        "Status": call.get("status"),
+                        "Arguments": str(call.get("arguments")),
+                    }
+                    for idx, call in enumerate(detail["tool_calls"], 1)
+                ]
+                st.dataframe(tool_rows, use_container_width=True, hide_index=True)
+    else:
+        st.warning(detail.get("note", "Case has not been investigated."))
+
+    if "review" in detail and detail["review"]:
+        st.markdown("**4. Runtime Reviewer Audit (Deterministic Mock Reviewer)**")
+        r_cols = st.columns(2)
+        r_cols[0].write(f"**Audit Quality:** `{detail['review'].get('quality', 'unknown')}`")
+        if detail.get("uncertainty"):
+            r_cols[1].warning(f"**Uncertainties:** {', '.join(detail['uncertainty'])}")
+        else:
+            r_cols[1].success("No policy violations or excessive uncertainty flagged.")
+
+    with st.expander("Raw Case JSON Payload", expanded=False):
+        st.json(detail, expanded=False)
+
+
+def _render_completed_evaluation_section(service: SimulationService, state: str) -> None:
+    st.markdown("### Ground-Truth Evaluation of Replay Run")
+    st.caption(
+        "Ground-truth evaluation is strictly isolated from runtime and compares output against "
+        "held-out scenario labels. Evaluated only when requested."
+    )
+
+    if service.config.mode != "replay":
+        st.info("Ground-truth run evaluation is available for Replay simulations with fixed nominal scenarios.")
+        return
+
+    eval_col1, eval_col2 = st.columns([1, 3])
+    can_eval = state in ("completed", "paused", "running")
+    if eval_col1.button("Score Run Against Ground Truth", disabled=not can_eval, key="live_eval_current"):
+        try:
+            st.session_state["live_current_eval"] = evaluate_live_replay(service)
+        except Exception as err:
+            st.error(f"Evaluation failed: {err}")
+
+    eval_result = st.session_state.get("live_current_eval")
+    if eval_result is not None:
+        st.success(f"Evaluated replay run `{eval_result.scenario}` (Seed {eval_result.seed})")
+        ecols = st.columns(4)
+        ecols[0].metric("Released Events", eval_result.operational_counts.get("released", 0))
+        ecols[1].metric("Processed Events", eval_result.operational_counts.get("processed", 0))
+        ecols[2].metric("True Malicious Events", eval_result.malicious_events)
+        ecols[3].metric("Total Cases Triaged", eval_result.operational_counts.get("cases_total", 0))
+
+        r_col, m_col = st.columns(2)
+        with r_col:
+            st.markdown("**Rule Detector Quality**")
+            rm = eval_result.rules_metrics
+            if rm.enabled:
+                rm_cols = st.columns(3)
+                rm_cols[0].metric("Precision", f"{rm.precision:.3f}")
+                rm_cols[1].metric("Recall", f"{rm.recall:.3f}")
+                rm_cols[2].metric("F1 Score", f"{rm.f1:.3f}")
+                st.caption(f"TP: {rm.tp} · FP: {rm.fp} · FN: {rm.fn}")
+            else:
+                st.caption("Rule detector was disabled for this run (no rule alerts evaluated).")
+
+        with m_col:
+            st.markdown("**ML Baseline Detector Quality**")
+            mm = eval_result.ml_metrics
+            if mm.enabled:
+                mm_cols = st.columns(3)
+                mm_cols[0].metric("Precision", f"{mm.precision:.3f}")
+                mm_cols[1].metric("Recall", f"{mm.recall:.3f}")
+                mm_cols[2].metric("F1 Score", f"{mm.f1:.3f}")
+                st.caption(f"TP: {mm.tp} · FP: {mm.fp} · FN: {mm.fn}")
+            else:
+                st.caption("ML detector was disabled for this run (no ML anomaly signals evaluated).")
+
+
+def _render_live_benchmark_panel() -> None:
+    st.markdown("### Controlled 4-Way Detector Experiment")
+    st.caption(
+        "Runs the exact same replay scenario and seed under all 4 detector configurations "
+        "(Rules + ML, Rules only, ML only, Ingestion baseline) to demonstrate real configuration impact."
+    )
+
+    b_cols = st.columns([2, 1, 1])
+    bench_scenario = b_cols[0].selectbox("Benchmark scenario", list(REPLAY_SCENARIOS), key="live_bench_scenario")
+    bench_seed = b_cols[1].number_input("Benchmark seed", min_value=0, max_value=2**53 - 1, value=31, step=1, key="live_bench_seed")
+    run_bench = b_cols[2].button("Run 4-Way Benchmark", type="secondary", key="live_run_benchmark")
+
+    if run_bench:
+        with st.spinner("Executing 4 controlled replay simulations on identical event streams..."):
+            try:
+                results = compare_replay_detector_configurations(
+                    scenario=bench_scenario,
+                    seed=int(bench_seed),
+                    model=baseline_model()[0],
+                )
+                st.session_state["live_benchmark_results"] = results
+            except Exception as err:
+                st.error(f"Benchmark error: {err}")
+
+    bench_data = st.session_state.get("live_benchmark_results")
+    if bench_data and isinstance(bench_data, list) and len(bench_data) > 0:
+        first = bench_data[0]
+        st.markdown(f"**Side-by-Side Results for Scenario `{first.scenario}` (Seed {first.seed}):**")
+        bench_rows = []
+        for res in bench_data:
+            r_f1 = f"{res.rules_metrics.f1:.3f}" if res.rules_metrics.enabled else "—"
+            m_f1 = f"{res.ml_metrics.f1:.3f}" if res.ml_metrics.enabled else "—"
+            name = {
+                "rules_and_ml": "Rules + ML",
+                "rules_only": "Rules only",
+                "ml_only": "ML only",
+                "none": "Neither detector (Baseline)",
+            }.get(res.detector_mode, res.detector_mode)
+            ops = res.operational_counts
+            bench_rows.append(
+                {
+                    "Configuration": name,
+                    "Rules": "ON" if res.enable_rules else "OFF",
+                    "ML": "ON" if res.enable_ml else "OFF",
+                    "Processed": ops.get("processed", 0),
+                    "Rule Alerts": ops.get("rule_alerts", 0),
+                    "ML Positives": ops.get("ml_positive_events", 0),
+                    "Total Cases": ops.get("cases_total", 0),
+                    "Rule-backed": ops.get("cases_rule_backed", 0),
+                    "ML-only": ops.get("cases_ml_only", 0),
+                    "Rule F1": r_f1,
+                    "ML F1": m_f1,
+                }
+            )
+        st.dataframe(bench_rows, use_container_width=True, hide_index=True)
+        st.caption(
+            "Controlled comparison takeaways: In 'Neither detector', 0 alerts and 0 cases are generated (pure ingestion baseline). "
+            "In 'Rules only', ML-only anomaly signals do not produce cases. "
+            "In 'ML only', rule signatures do not fire and cases originate solely from event-level anomaly flags."
+        )
 
 
 @st.fragment(run_every=1.0)
@@ -151,6 +335,35 @@ def live_panel() -> None:
     controls[2].number_input("Seed", min_value=0, max_value=2**53 - 1, value=31, step=1, key="live_seed", disabled=busy)
     controls[3].multiselect("Attack families", list(ATTACK_FAMILIES), default=list(ATTACK_FAMILIES), key="live_attacks", disabled=busy, help="Continuous mode only.")
     controls[4].slider("Events per second", MIN_RATE, MAX_RATE, DEFAULT_RATE, 1.0, key="live_rate", disabled=busy)
+
+    flag_cols = st.columns([1, 1, 2])
+    flag_cols[0].checkbox(
+        "Rule-based detector",
+        value=True,
+        key="live_enable_rules",
+        disabled=busy,
+        help="Evaluates authentication events against security detection rules (e.g. bruteforce, impossible travel).",
+    )
+    flag_cols[1].checkbox(
+        "ML baseline detector",
+        value=True,
+        key="live_enable_ml",
+        disabled=busy,
+        help="Scores events with the supervised Random Forest model (prob >= 0.5 flags ML-positive signals).",
+    )
+
+    rules_on = st.session_state.get("live_enable_rules", True)
+    ml_on = st.session_state.get("live_enable_ml", True)
+    if rules_on and ml_on:
+        mode_label = "Rules + ML (Full correlation & dual detection)"
+    elif rules_on:
+        mode_label = "Rules only (Rule alerts & rule-backed cases only)"
+    elif ml_on:
+        mode_label = "ML only (Event anomaly signals & ML-only cases only)"
+    else:
+        mode_label = "Neither detector (Ingestion baseline · 0 alerts · 0 cases)"
+    flag_cols[2].caption(f"**Detector configuration:** {mode_label}")
+
     if st.session_state.get("live_error"):
         st.error(st.session_state["live_error"])
 
@@ -163,13 +376,24 @@ def live_panel() -> None:
 
     if service is None:
         st.info("No simulation is running. Choose a mode and press Start.")
+        st.markdown("---")
+        _render_live_benchmark_panel()
         return
+
     st.markdown(f"**Status: {state.upper()}** · {summary['message']}")
     if state == "error":
         st.error(summary["error"])
     if state == "completed":
         st.caption("Stopped or finished. Press Reset to start a new run.")
 
+    active_rules = "ACTIVE" if summary.get("enable_rules") else "DISABLED"
+    active_ml = "ACTIVE" if summary.get("enable_ml") else "DISABLED"
+    st.caption(
+        f"**Active Engines:** Rules: `{active_rules}` · ML: `{active_ml}` ({summary.get('detector_mode', '').replace('_', ' ').title()}) · "
+        f"Agents: {summary['agent_mode']} ({summary['provider_id']}) · Simulation `{summary['simulation_id'][:16]}...`"
+    )
+
+    st.markdown("##### 1. Operational Ingestion Stream")
     row = st.columns(6)
     row[0].metric("Released", summary["released"])
     row[1].metric("Processed", summary["processed"])
@@ -177,31 +401,145 @@ def live_panel() -> None:
     row[3].metric("Simulated time", summary["simulated_time"][11:19] + " UTC" if summary["simulated_time"] else "—")
     row[4].metric("Elapsed", f"{summary['elapsed_seconds']:.0f} s")
     row[5].metric("Effective rate", f"{summary['effective_rate']:g} /s", help=f"Configured {summary['configured_rate']:g} /s")
+
+    st.markdown("##### 2. Detection & Case Triage Pipeline")
     counts = st.columns(5)
-    counts[0].metric("Rule alerts", summary["rule_alerts"])
+    counts[0].metric("Rule alerts", summary["rule_alerts"], help="Incidents triggered by rule engine.")
     counts[1].metric("Open cases", summary["cases_open"], help=f"Cases whose evidence is still in the {summary['retention_hours']:g} h window.")
-    counts[2].metric("Investigations", summary["investigations_completed"])
+    counts[2].metric("Investigations", summary["investigations_completed"], help="Cases investigated by deterministic mock agent.")
     counts[3].metric("Tool calls", summary["tool_calls"], help=f"Errors: {summary['tool_errors']}")
     counts[4].metric("ML-only not investigated", summary["ml_only_not_investigated"], help="Session budget for ML-only investigations reached.")
-    st.caption(f"Agents: {summary['agent_mode']} ({summary['provider_id']}). Simulation {summary['simulation_id']}.")
 
-    st.markdown("**Live event stream** (latest first, observable fields only)")
-    st.dataframe(list(reversed(service.recent_events())), use_container_width=True, hide_index=True)
-    st.markdown("**Recent alerts**")
-    st.dataframe(service.alerts()[:50], use_container_width=True, hide_index=True)
-    st.markdown("**Cases**")
+    st.markdown("---")
+    st.markdown("### Case Triage & Evidence Workbench")
     cases = service.cases()
-    st.dataframe(cases, use_container_width=True, hide_index=True)
     if cases:
+        st.dataframe(live_case_rows(service), use_container_width=True, hide_index=True)
         chosen = st.selectbox("Inspect case", [case["case_id"] for case in cases], key="live_case")
-        st.json(live_case_detail(service, chosen), expanded=False)
-    st.markdown("**Investigation activity**")
-    st.dataframe(service.activity()[:100], use_container_width=True, hide_index=True)
-    with st.expander("Observability"):
+        detail = live_case_detail(service, chosen)
+        if detail:
+            _render_case_dossier(detail)
+    else:
+        if not summary.get("enable_rules") and not summary.get("enable_ml"):
+            st.info("Ingestion baseline active (all detectors disabled). Events are ingested and processed without generating alerts or cases.")
+        else:
+            st.info("No cases triaged yet. Detection engines are monitoring the incoming event stream.")
+
+    st.markdown("---")
+    tab_stream, tab_alerts_live, tab_activity = st.tabs(["Live Event Stream", "Recent Rule Alerts", "Investigation Activity"])
+    with tab_stream:
+        st.dataframe(list(reversed(service.recent_events())), use_container_width=True, hide_index=True)
+    with tab_alerts_live:
+        st.dataframe(service.alerts()[:50], use_container_width=True, hide_index=True)
+    with tab_activity:
+        st.dataframe(service.activity()[:100], use_container_width=True, hide_index=True)
+
+    with st.expander("Engine Observability"):
         st.json(summary, expanded=False)
+
+    st.markdown("---")
+    _render_completed_evaluation_section(service, state)
+    st.markdown("---")
+    _render_live_benchmark_panel()
 
 
 st.set_page_config(page_title="Login-log anomaly explorer", layout="wide")
+
+st.markdown(
+    """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    code, pre {
+        font-family: 'JetBrains Mono', monospace !important;
+    }
+
+    .block-container {
+        padding-top: 1.8rem;
+        padding-bottom: 3rem;
+        max-width: 1400px;
+    }
+
+    h1 {
+        font-size: 1.75rem !important;
+        font-weight: 700 !important;
+        letter-spacing: -0.02em !important;
+        color: #f8fafc !important;
+        margin-bottom: 0.2rem !important;
+    }
+    h2, h3, h4 {
+        font-weight: 600 !important;
+        letter-spacing: -0.01em !important;
+        color: #e2e8f0 !important;
+    }
+    h5 {
+        font-size: 0.85rem !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.05em !important;
+        color: #94a3b8 !important;
+        margin-top: 1.2rem !important;
+        margin-bottom: 0.6rem !important;
+    }
+
+    [data-testid="stMetric"] {
+        background-color: #111827;
+        border: 1px solid #1f2937;
+        border-radius: 6px;
+        padding: 0.75rem 1rem;
+        box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.2);
+    }
+    [data-testid="stMetricLabel"] {
+        font-size: 0.75rem !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.04em !important;
+        color: #94a3b8 !important;
+        font-weight: 600 !important;
+    }
+    [data-testid="stMetricValue"] {
+        font-size: 1.35rem !important;
+        font-weight: 700 !important;
+        color: #f1f5f9 !important;
+        font-family: 'JetBrains Mono', monospace !important;
+    }
+
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        border-bottom: 1px solid #1f2937;
+        padding-bottom: 4px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 4px 4px 0 0;
+        padding: 8px 16px;
+        font-size: 0.9rem;
+        font-weight: 500;
+        color: #94a3b8;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #1e293b !important;
+        color: #60a5fa !important;
+        font-weight: 600 !important;
+    }
+
+    .stButton > button {
+        border-radius: 5px;
+        font-weight: 500;
+        font-size: 0.85rem;
+    }
+
+    [data-testid="stDataFrame"] {
+        border: 1px solid #1f2937;
+        border-radius: 6px;
+        overflow: hidden;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.title("Login-log anomaly explorer")
 st.caption("Synthetic data only. Labels appear only in sections marked **uses labels**.")
 
@@ -233,8 +571,8 @@ except ValueError as error:
     st.error(f"Configuration rejected: {error}")
     st.stop()
 
-tab_generate, tab_live, tab_detect, tab_alerts, tab_eval, tab_agentic, tab_lab = st.tabs(
-    ["Generate", "SOC Live", "Detectors", "Alerts", "Evaluation (labels)", "Investigations", "Threat Lab (labels)"]
+tab_live, tab_generate, tab_detect, tab_alerts, tab_eval, tab_agentic, tab_lab = st.tabs(
+    ["SOC Live", "Generate", "Detectors", "Alerts", "Evaluation (labels)", "Investigations", "Threat Lab (labels)"]
 )
 
 try:

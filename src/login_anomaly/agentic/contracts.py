@@ -16,6 +16,8 @@ from typing import Any
 VERDICTS = frozenset({"malicious", "benign", "inconclusive"})
 SEVERITIES = frozenset({"medium", "high"})
 TOOL_STATUSES = frozenset({"ok", "error", "denied"})
+RISK_LEVELS = frozenset({"low", "medium", "high"})
+HYPOTHESIS_STANCES = frozenset({"supports", "contradicts", "open"})
 
 # Fields an investigator may cite. They are the observable AuthEvent fields.
 OBSERVABLE_FIELDS = frozenset({"event_id", "timestamp_utc", "account_id", "source_ip", "outcome", "country_code"})
@@ -86,6 +88,24 @@ class ToolCallRecord:
 
 
 @dataclass(frozen=True)
+class Hypothesis:
+    """Optional structured alternative the investigator considered. Not a calibrated probability."""
+
+    statement: str
+    stance: str
+    evidence_event_ids: tuple[str, ...] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        _text(self.statement, "statement")
+        if self.stance not in HYPOTHESIS_STANCES:
+            raise ValueError(f"stance must be one of {sorted(HYPOTHESIS_STANCES)}")
+        if not isinstance(self.evidence_event_ids, tuple):
+            raise ValueError("evidence_event_ids must be a tuple")
+        for event_id in self.evidence_event_ids:
+            _text(event_id, "evidence_event_ids item")
+
+
+@dataclass(frozen=True)
 class InvestigationResult:
     alert_id: str
     verdict: str
@@ -94,6 +114,9 @@ class InvestigationResult:
     tool_calls: tuple[ToolCallRecord, ...]
     justification: str
     limitations: tuple[str, ...] = field(default_factory=tuple)
+    # Qualitative operational risk, separate from verdict. Optional for backward compatibility.
+    risk_level: str | None = None
+    hypotheses: tuple[Hypothesis, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         _text(self.alert_id, "alert_id")
@@ -108,6 +131,10 @@ class InvestigationResult:
         if not all(isinstance(item, ToolCallRecord) for item in self.tool_calls):
             raise ValueError("tool_calls must contain ToolCallRecord objects")
         _text(self.justification, "justification")
+        if self.risk_level is not None and self.risk_level not in RISK_LEVELS:
+            raise ValueError(f"risk_level must be one of {sorted(RISK_LEVELS)}")
+        if not all(isinstance(item, Hypothesis) for item in self.hypotheses):
+            raise ValueError("hypotheses must contain Hypothesis objects")
 
 
 @dataclass(frozen=True)
@@ -137,6 +164,13 @@ def parse_investigation_result(raw: object) -> InvestigationResult:
     limitations = tuple(_as_list(raw["limitations"], "limitations"))
     if not all(isinstance(item, str) for item in limitations):
         raise ValueError("limitations must be strings")
+    hypotheses_raw = raw.get("hypotheses", [])
+    if hypotheses_raw is None:
+        hypotheses_raw = []
+    hypotheses = tuple(_parse_hypothesis(item) for item in _as_list(hypotheses_raw, "hypotheses"))
+    risk_level = raw.get("risk_level")
+    if risk_level is not None and not isinstance(risk_level, str):
+        raise ValueError("risk_level must be a string or null")
     return InvestigationResult(
         alert_id=raw["alert_id"],  # type: ignore[arg-type]
         verdict=raw["verdict"],  # type: ignore[arg-type]
@@ -145,6 +179,21 @@ def parse_investigation_result(raw: object) -> InvestigationResult:
         tool_calls=calls,
         justification=raw["justification"],  # type: ignore[arg-type]
         limitations=limitations,
+        risk_level=risk_level,
+        hypotheses=hypotheses,
+    )
+
+
+def _parse_hypothesis(item: Any) -> Hypothesis:
+    if not isinstance(item, Mapping):
+        raise ValueError("each hypothesis must be a mapping")
+    evidence_ids = item.get("evidence_event_ids", ())
+    if isinstance(evidence_ids, list):
+        evidence_ids = tuple(evidence_ids)
+    return Hypothesis(
+        statement=item.get("statement"),  # type: ignore[arg-type]
+        stance=item.get("stance"),  # type: ignore[arg-type]
+        evidence_event_ids=evidence_ids,  # type: ignore[arg-type]
     )
 
 

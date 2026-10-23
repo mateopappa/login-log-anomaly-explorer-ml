@@ -1,0 +1,186 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: login
+      POSTGRES_PASSWORD: login
+      POSTGRES_DB: login_anomaly
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Host 5432 is often taken by a local Postgres. Publish an alternate port
+    # only for host-side clients; the API reaches postgres:5432 on the compose network.
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U login -d login_anomaly"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      DATABASE_URL: postgresql+psycopg://login:login@postgres:5432/login_anomaly
+      CORS_ORIGINS: http://localhost:5173,http://localhost:3000,http://localhost:8080
+      INVESTIGATOR_DEFAULT: mock
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-5-5}
+      KAFKA_BOOTSTRAP: redpanda:9092
+      GRAFANA_URL: http://localhost:3000
+      PROMETHEUS_URL: http://localhost:9090
+      WORKER_METRICS_URL: http://pipeline-worker:9100/metrics
+      REDPANDA_CONSOLE_URL: http://localhost:8081
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE: http://localhost:8000
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+
+  # --- optional event pipeline (docker compose --profile pipeline up) ---
+  redpanda:
+    profiles: ["pipeline"]
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.4
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp
+      - "1"
+      - --memory
+      - 512M
+      - --reserve-memory
+      - 0M
+      - --node-id
+      - "0"
+      - --check=false
+      - --kafka-addr
+      - internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr
+      - internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr
+      - 0.0.0.0:8082
+      - --advertise-pandaproxy-addr
+      - localhost:8082
+    ports:
+      - "19092:19092"
+      - "8082:8082"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy'"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+
+  redpanda-console:
+    profiles: ["pipeline"]
+    image: docker.redpanda.com/redpandadata/console:v2.7.2
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+    ports:
+      - "8081:8080"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+
+  redpanda-init:
+    profiles: ["pipeline"]
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.4
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        for topic in auth.events.acme-hq auth.events.acme-latam auth.events.acme-emea auth.events.northwind auth.events.contoso-jp; do
+          rpk topic create "$$topic" --brokers redpanda:9092 || true
+        done
+        echo "topics ready"
+
+  pipeline-producer:
+    profiles: ["pipeline"]
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    command:
+      [
+        "python",
+        "-m",
+        "login_anomaly.pipeline.producer",
+        "--bootstrap",
+        "redpanda:9092",
+        "--interval",
+        "12",
+        "--events",
+        "120",
+      ]
+    environment:
+      KAFKA_BOOTSTRAP: redpanda:9092
+    depends_on:
+      redpanda-init:
+        condition: service_completed_successfully
+
+  pipeline-worker:
+    profiles: ["pipeline"]
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    command:
+      [
+        "python",
+        "-m",
+        "login_anomaly.pipeline.worker",
+        "--bootstrap",
+        "redpanda:9092",
+        "--metrics-port",
+        "9100",
+      ]
+    environment:
+      KAFKA_BOOTSTRAP: redpanda:9092
+      METRICS_PORT: "9100"
+    ports:
+      - "9100:9100"
+    depends_on:
+      redpanda-init:
+        condition: service_completed_successfully
+
+  prometheus:
+    profiles: ["pipeline"]
+    image: prom/prometheus:v2.54.1
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - pipeline-worker
+
+  grafana:
+    profiles: ["pipeline"]
+    image: grafana/grafana:11.2.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+volumes:
+  pgdata:

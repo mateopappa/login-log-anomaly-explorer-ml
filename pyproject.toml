@@ -5,17 +5,33 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "login-anomaly"
 version = "0.1.0"
-description = "Login-log anomaly explorer: synthetic generator, rule and ML detectors, evaluation."
+description = "Login-log anomaly explorer: synthetic generator, rule and ML detectors, evaluation, SOC API."
 requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "httpx>=0.27"]
 # ml: the supervised baseline (Phase D). Kept optional so the generator and the rule
 # detector install with no third-party runtime dependencies.
 ml = ["scikit-learn>=1.4"]
 # dashboard: the local Streamlit app only. Business logic does not depend on it.
 dashboard = ["streamlit>=1.36"]
+# api: FastAPI product surface + Postgres/SQLite persistence.
+api = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "psycopg[binary]>=3.1",
+    "pydantic>=2.7",
+]
+# agents: optional Anthropic SDK for Claude Haiku investigations.
+agents = ["anthropic>=0.40"]
+# pipeline: multi-tenant Redpanda/Kafka producer + worker + Prometheus metrics.
+pipeline = ["kafka-python>=2.0.2", "prometheus-client>=0.20"]
+
+[project.scripts]
+login-anomaly-api = "login_anomaly.api.app:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]

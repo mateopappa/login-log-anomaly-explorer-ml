@@ -1,8 +1,148 @@
 # Login-log anomaly explorer
 
-A local, reproducible prototype for detecting suspicious authentication activity in **synthetic** login logs. It generates labelled traffic, runs a rule detector and an ML baseline independently, groups their signals into label-free cases, investigates each case with a bounded read-only investigator, reviews the result, and compares everything against ground truth only at evaluation time. The only investigator and scenario-proposal provider today are **deterministic mocks**; no LLM is called. Real LLM agents are designed in `docs/agentic-evaluators.md` but not validated.
+A local, reproducible prototype for detecting suspicious authentication activity in **synthetic** login logs. It generates labelled traffic, runs a rule detector and an ML baseline independently, groups their signals into label-free cases, investigates each case with a bounded read-only investigator (mock baseline or optional Claude Haiku), reviews the result deterministically, and compares everything against ground truth only at evaluation time.
 
-Read `docs/agentic-evaluators.md` for the status of each component before drawing conclusions.
+Primary UI: React SOC console + FastAPI + PostgreSQL/SQLite. Streamlit remains available as a secondary demo. Read `docs/agentic-evaluators.md` for component status before drawing conclusions.
+
+## How the product works
+
+End-to-end flow (runtime never sees ground-truth labels; evaluation joins them only after a run finishes):
+
+```mermaid
+flowchart TB
+  subgraph ui [React SOC console]
+    Console[SOC Console]
+    CasesUI[Cases workbench]
+    LiveUI[Detection Lab / SOC Live]
+    EvalUI[Evaluation Lab]
+  end
+
+  subgraph api [FastAPI]
+    Routes[API routers]
+    Services[Application services]
+  end
+
+  subgraph domain [Python domain engine]
+    Gen[Synthetic generator<br/>seed + campaign plan]
+    Events[Observable AuthEvents]
+    Rules[Rule detector]
+    ML[ML detector]
+    Corr[Correlation<br/>exact event-id cases]
+    Inv[Case investigator loop<br/>read-only tools]
+    Mock[Mock provider]
+    Haiku[Claude Haiku provider]
+    Review[Deterministic reviewer]
+  end
+
+  subgraph store [Persistence]
+    DB[(PostgreSQL / SQLite<br/>datasets events cases<br/>runs tools reviews)]
+  end
+
+  subgraph evalSide [Evaluation only]
+    GT[(Ground truth labels)]
+    Metrics[Precision Recall F1<br/>investigation quality]
+  end
+
+  Console --> Routes
+  CasesUI --> Routes
+  LiveUI --> Routes
+  EvalUI --> Routes
+  Routes --> Services
+  Services --> Gen
+  Gen --> Events
+  Gen -.-> GT
+  Events --> Rules
+  Events --> ML
+  Rules --> Corr
+  ML --> Corr
+  Corr --> Inv
+  Inv --> Mock
+  Inv --> Haiku
+  Inv --> Review
+  Services --> DB
+  Review --> DB
+  Events --> DB
+  Corr --> DB
+  EvalUI --> Metrics
+  Metrics --> GT
+  Inv -.->|never reads| GT
+```
+
+Trust boundary in one picture:
+
+```mermaid
+flowchart LR
+  subgraph trusted [Trusted generation]
+    Seed[Seed + ScenarioPlan]
+    Build[generate_with_truth]
+    Seed --> Build
+    Build --> Obs[Events only]
+    Build --> Labels[Ground truth]
+  end
+
+  subgraph runtime [Runtime - no labels]
+    Det[Rules + ML]
+    Case[Cases]
+    Agent[Investigator + tools]
+    Audit[Deterministic review]
+    Obs --> Det --> Case --> Agent --> Audit
+  end
+
+  subgraph offline [Offline evaluation]
+    Score[Score detectors and investigations]
+    Labels --> Score
+    Audit --> Score
+    Det --> Score
+  end
+```
+
+Three ways data enters the product:
+
+| Path | What it does | Where you see it |
+| --- | --- | --- |
+| **Seed demo** | Batch generate → detect → correlate → investigate → persist | SOC Console, Cases |
+| **SOC Live** | Time-release events via `advance` (UI auto-ticks) → same pipeline in-process | Detection Lab |
+| **Multi-site pipeline** | 5 tenant producers → Redpanda (Kafka API) → worker → Prometheus/Grafana | Pipeline page |
+
+Pipeline stages stay independent: rules and ML do not fuse scores; the investigator only uses allowlisted read-only tools; the reviewer checks citations/policy without labels.
+
+### Demo path (product story)
+
+The SOC Console surfaces a fixed **Demo path**: seed → multi-site streams → SOC Live → investigate → evaluate, plus a **Trust model** panel (synthetic data, GT isolation, agent containment, independent detectors, honest baselines). Follow those steps in a live interview; the talking points are also returned by `GET /api/v1/product/demo-path`.
+
+### Multi-site event pipeline (optional Compose profile)
+
+Five synthetic sites/subsidiaries (`acme-hq`, `acme-latam`, `acme-emea`, `northwind`, `contoso-jp`) each own a topic. Producers publish namespaced `AuthEvent` envelopes; a worker consumes, runs the rule detector, and exports Prometheus metrics. Grafana ships a provisioned dashboard. **Kubernetes is the production narrative**, not a required local dependency — Compose proves the event-driven path.
+
+```bash
+# Core product
+docker compose up --build
+
+# Product + broker + observability
+docker compose --profile pipeline up --build
+```
+
+| Service | Port | Role |
+| --- | --- | --- |
+| Redpanda | `19092` (Kafka), Console `8081` | Kafka-compatible broker |
+| pipeline-producer | — | Publishes batches per tenant |
+| pipeline-worker | `9100` | Consumer + `/metrics` |
+| Prometheus | `9090` | Scrapes the worker |
+| Grafana | `3000` (admin/admin) | Multi-site dashboard |
+
+```mermaid
+flowchart LR
+  P1[Producer acme-hq]
+  P2[Producer … 4 more sites]
+  RP[(Redpanda)]
+  W[Worker + rules]
+  Prom[Prometheus]
+  Graf[Grafana]
+  P1 --> RP
+  P2 --> RP
+  RP --> W
+  W --> Prom --> Graf
+```
 
 ## Install
 
@@ -10,10 +150,49 @@ Python 3.11 or newer.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install -e ".[dev,ml,dashboard]"
+.venv/bin/python -m pip install -e ".[dev,ml,dashboard,api,agents,pipeline]"
+cp .env.example .env
 ```
 
-Extras: `dev` (pytest), `ml` (scikit-learn, for the baseline), `dashboard` (Streamlit). The generator, the rule detector, and the contracts need no third-party runtime packages.
+Extras: `dev` (pytest, httpx), `ml` (scikit-learn), `dashboard` (Streamlit), `api` (FastAPI, SQLAlchemy, Alembic, Postgres driver), `agents` (Anthropic SDK for Claude Haiku), `pipeline` (kafka-python + prometheus-client for Redpanda producers/workers). The generator, the rule detector, and the contracts need no third-party runtime packages.
+
+## Product UI (React) + API
+
+Primary product surface: React console + FastAPI + PostgreSQL.
+
+```bash
+# API (SQLite for local quickstart; use Docker Compose for Postgres)
+export DATABASE_URL=sqlite+pysqlite:///./data/login_anomaly.db
+mkdir -p data
+.venv/bin/uvicorn login_anomaly.api.app:app --factory --reload --port 8000
+
+# Frontend
+cd frontend && npm install && npm run dev
+```
+
+Open http://localhost:5173. Seed a demo dataset from the SOC Console, open a case, run a mock investigation (or Haiku if `ANTHROPIC_API_KEY` is set).
+
+### Docker Compose
+
+```bash
+docker compose up --build
+# optional distributed path:
+docker compose --profile pipeline up --build
+```
+
+Core services: Postgres (`5432`), API (`8000`), frontend (`8080`). Migrations run on API start (`alembic upgrade head`). Pipeline profile adds Redpanda, producer, worker, Prometheus, and Grafana (see above).
+
+### Claude Haiku
+
+Set in `.env` (never commit secrets):
+
+```bash
+ANTHROPIC_API_KEY=...
+ANTHROPIC_MODEL=claude-haiku-5-5
+INVESTIGATOR_DEFAULT=mock
+```
+
+Without a key the API starts and uses the mock investigator. Haiku requests return HTTP 503 until configured. The UI labels every run as **Mock baseline** or **Claude Haiku**.
 
 ## Test
 
@@ -71,60 +250,76 @@ Manual acceptance checklist (dashboard, default sidebar values):
 
 ## SOC Live
 
-SOC Live presents the system as if it were watching authentication traffic. Events are released over time, and the detectors and agents only process what has been released so far. It is a local demo, not a monitoring product.
+SOC Live transforms the platform into an enterprise security operations center console. Events are streamed over simulated time, and detectors, correlation, and mock investigation agents process incoming activity incrementally.
 
-- **Replay**: a fixed scenario (seed, preset) generated by the existing generator and released in its original order. The same scenario and seed always give the same stream and the same results.
-- **Continuous**: deterministic 3-hour chunks generated on demand, with benign background traffic. Campaigns from the selected families appear in every third chunk.
-- **Controls**: Start, Pause, Resume, Reset. The playback rate defaults to **5 events per second** (range 1 to 50). Pause stops releases; Resume continues from the same position. Reset returns to Idle and clears everything derived from the run. Stop ends a continuous run for good.
-- **Status**: Idle, Running, Paused, Completed (replay finished, or stopped by the user), or Error. An error shows a safe message, and Reset is the recovery path.
+### Information Architecture & Visual Hierarchy
 
-Sequence for each released batch (the same code path for both modes):
+The redesigned console organizes security telemetry into clear, prioritized layers:
 
-1. Released events are added to a retained buffer. Events older than 2 hours of simulated time, or beyond 5000 events, are dropped.
-2. The trained ML baseline scores the new events. It is not retrained.
-3. The rule detector runs over the retained buffer. An alert that grows (for example, a bruteforce window that slides) updates the same incident instead of creating a new one.
-4. ML-positive events are attached to a rule alert only when they name the same event id. Otherwise they become ML-only cases. Ambiguous matches stay separate, with their candidates recorded.
-5. Each new or changed case runs the mock bounded investigator over the retained events, then the deterministic reviewer. Unchanged cases keep their earlier result.
+1. **Active Detection Engines & Controls**:
+   - Independent feature flags:
+     - **Rule-based detector** (ON/OFF): evaluates events against signature rules (bruteforce, spraying, impossible travel).
+     - **ML baseline detector** (ON/OFF): scores events with supervised Random Forest model (prob $\ge 0.5$ flags ML-positive signals).
+   - Four supported configurations:
+     - `Rules + ML`: Dual detection with full exact-ID correlation and provenance-bound cases.
+     - `Rules only`: Incidents and cases originate exclusively from signature rule alerts.
+     - `ML only`: Incidents and cases originate exclusively from event-level anomaly flags.
+     - `Neither detector`: Pure ingestion baseline (events are released and processed without generating alerts or cases).
+   - Source & playback configuration: Mode (Replay / Continuous), Replay scenario, Seed, Attack families, and Events per second rate slider.
+   - Lifecycle controls: **Start**, **Pause** (temporarily stops releases), **Resume** (continues at current position), **Stop** (terminates run), and **Reset** (clears session state to idle).
 
-Isolation guarantees:
+2. **Dual-Tier Live Metrics**:
+   - **Tier 1 (Operational Ingestion Stream)**: Released events, Processed events, Pending queue, Simulated time (UTC), Elapsed wall time, and Effective release rate.
+   - **Tier 2 (Detection & Triage Pipeline)**: Rule alerts, Open cases (within 2-hour window), Completed investigations, Tool calls (with error tally), and ML-only budget-capped cases.
 
-- Runtime code (`live/`, `workflow`, `correlation`, `agentic/`, the dashboard view) never imports `evaluation` or the ground-truth module. A test checks this for each module.
-- The replay and continuous sources release `AuthEvent` objects only. No labels are created for them.
-- Each browser session has its own service in session state. Two sessions never share a simulation.
+3. **Case Triage & Progressive Disclosure Case Dossier**:
+   - Replaces raw JSON dumps with a scannable triage table (Case ID, Origin Kind, Priority, Signals, Events, Verdict, Review Quality, Status).
+   - Interactive **Case Dossier** for any selected case:
+     - **Header & Provenance**: Origin badge (`Rule-backed` vs `ML-only`), Priority, Signals count, Retention window status.
+     - **Contributing Detector Signals & Correlation**: Exact rule signatures or ML threshold scores, with correlation basis narrative (`exact_alert_event_id`, `unmatched`, `ambiguous`).
+     - **Observable Authentication Events**: Filtered table of supporting login logs (timestamp, account, source IP, country, outcome).
+     - **Investigation Findings**: Transparent disclosure of deterministic mock agent, final verdict badge, confidence score, evidence citations, and expandable step-by-step tool trace.
+     - **Reviewer Audit**: Runtime verification checks, evidence validity, and policy uncertainty flags.
+     - **Raw Case JSON**: Expandable technical payload for developer debugging.
 
-Agents: every investigation and review is labelled `mock`. No LLM is called, no API key is read, and nothing is paid. The panel shows the provider id.
+4. **Telemetry & Observability Tabs**:
+   - Live Event Stream (latest observable events).
+   - Recent Rule Alerts (sliding-window incidents).
+   - Investigation Activity Log (chronological agent timeline).
+   - Engine Observability (internal state transitions and timings).
 
-Known limitations:
+5. **Completed Run Evaluation & Fair 4-Way Detector Experiment**:
+   - **Evaluate Completed Replay Run**: Scores a completed or paused replay simulation against held-out ground truth. Distinguishes operational counts from held-out quality metrics (Precision, Recall, F1, TP, FP, FN) for rules and ML independently.
+   - **Controlled 4-Way Detector Benchmark**: Executes all 4 detector configurations on the exact same replay scenario and seed. Proves real detector flag semantics and provides side-by-side operational vs accuracy comparison on identical event streams.
 
-- Detection uses a 2-hour context window, which covers the longest rule window (120 minutes). A campaign that spans more than that is detected only from its retained part.
-- Continuous chunks are independent. Accounts and IP histories do not carry across chunks, and campaigns never cross a chunk boundary.
-- Processing is synchronous, so `pending` counts events not yet released, not events waiting in a queue. There is no staged or delayed presentation of investigation steps. Latency is measured with a monotonic clock and reported as is.
-- ML-only cases are mostly false positives on benign traffic. Only 25 are investigated per session. The rest are shown as "not investigated".
-- "Open cases" means cases whose evidence is still inside the retention window. Cases remain in the history list after that, with status "closed".
-- Only the four replay presets listed in `live/sources.py` are available. Threat Lab scenarios are not replayed here.
+### Operating Semantics & Constraints
+
+- **Event Buffer & Retention Window**: Ingestion maintains a sliding 2-hour simulated-time context window (up to 5,000 events). Events older than 2 hours leave the window; cases whose evidence has expired are marked "closed".
+- **Exact-ID Correlation**: The system matches ML-positive signals to rule alerts using exact event-ID equality. It does not perform fuzzy heuristic clustering.
+- **Investigation Budget**: ML-only cases (frequently false alarms on benign noise) are capped at 25 automated investigations per session to conserve agent resources.
+- **Ground-Truth Isolation**: Runtime modules (`live/`, `workflow.py`, `correlation.py`, `agentic/`, `dashboard/view.py`) strictly never import `evaluation` or ground-truth labels. Label comparison only occurs offline or post-run via `evaluation/live.py`.
+- **Mock Disclosures**: Investigator and Reviewer are deterministic local mocks. No external LLM or API keys are required.
 
 Commands:
 
 ```bash
-# Focused SOC Live tests (engine, sources, headless dashboard)
-.venv/bin/python -m pytest -q tests/test_live_engine.py tests/test_live_sources.py tests/test_dashboard_live.py
+# Focused SOC Live tests (engine, sources, live evaluation, headless dashboard)
+.venv/bin/python -m pytest -q tests/test_live_engine.py tests/test_live_sources.py tests/test_live_evaluation.py tests/test_dashboard_live.py
 
-# Dashboard: open the SOC Live tab
+# Launch Dashboard:
 .venv/bin/python -m streamlit run src/login_anomaly/dashboard/app.py
 ```
 
-Manual acceptance (SOC Live tab):
+Manual acceptance checklist (SOC Live tab):
 
-- [ ] **Replay**: scenario "Mixed campaigns", seed 31, rate 5. Press Start. "Released" rises by about 5 per second.
-- [ ] Rule alerts and cases appear only after their events are released. The counts never exceed what has been released.
-- [ ] Pause: "Released" stops. Wait a few seconds, then Resume. The count continues from where it stopped, with no duplicates in the event stream.
-- [ ] Reset: all counters, alerts, cases and activity return to zero. Start again and the first events match the previous run.
-- [ ] Let the replay finish. The status reads Completed with "Replay finished". Released and processed both equal the generated total, and pending is 0.
-- [ ] **Continuous**: Start with all attack families. Events keep arriving. Campaign bursts appear every few chunks as alerts and cases.
-- [ ] Press Stop (or Pause and Reset). Generation ends. Reset and Start again works.
-- [ ] Open a case. Its evidence rows, verdict, uncertainty and review are shown, and the mode reads `mock`.
-- [ ] Every agent label says mock. No key or network setting is needed.
-- [ ] Open a second browser tab. Starting a simulation there does not change the first tab.
+- [ ] **Initial Idle State**: Status reads "No simulation is running", Start is enabled, Pause/Reset disabled, Mock agent banner is prominently displayed.
+- [ ] **Detector Feature Flags**: Toggling Rule-based detector or ML baseline updates the configuration caption immediately ("Rules + ML", "Rules only", "ML only", "Neither detector").
+- [ ] **Ingestion Baseline (Neither detector)**: Unchecking both detectors and clicking Start streams and processes events, while Rule alerts and Cases remain at 0.
+- [ ] **Replay Simulation**: Select scenario "Mixed campaigns", seed 31, rate 5. Press Start. Events stream and metrics advance.
+- [ ] **Case Dossier**: When cases appear, select one in "Inspect case". The Case Dossier displays Origin, Contributing Signals, Events, Mock Reasoning, and Tool Trace without raw JSON clutter.
+- [ ] **Lifecycle Controls**: Pause stops event release; Resume continues smoothly; Stop transitions to COMPLETED with "Stopped by user".
+- [ ] **Replay Evaluation**: Click "Score Run Against Ground Truth". Verify separate precision, recall, and F1 metrics for Rule and ML detectors.
+- [ ] **4-Way Benchmark**: Click "Run 4-Way Benchmark". Verify the comparison table displays all 4 variants side-by-side with identical processed counts and expected detector differences.
 
 ## Layout
 
@@ -171,15 +366,41 @@ The MVP defines three bounded agent roles in the investigation and threat evalua
 - The boundary stress set sits just outside the rule thresholds by design. It shows how fast rules fail at their edge (rules F1 0.01, ML 0.70). It is not evidence of generalization. A real shift test (different attacker behaviour, far from the thresholds) is future work.
 - The ML baseline was trained on the nominal specification only. None of these numbers estimates performance on real logs, and 2 or 3 seeds per evaluation set are too few to rank the methods with confidence.
 - The dashboard seed control stops at 2^53-1, the largest integer a browser number holds exactly. The generator accepts up to 2^63-1.
-- The case investigator and scenario proposal provider are mocks. They show the bounded loop, validation, and review contracts, not model reasoning. The mock marks every rule-backed case malicious, so its case verdicts say nothing about an LLM.
+- The default investigator is a deterministic mock. It shows the bounded loop, validation, and review contracts. It marks every rule-backed case malicious, so mock case verdicts are not a measure of LLM quality. Claude Haiku is optional via `ANTHROPIC_API_KEY`.
 - Case correlation uses exact event-id matches only. An ML signal on an event covered by two alerts stays an ML-only case, with its candidates recorded, rather than being attached to either alert.
-- The reviewer's checks are rule-based (citations, zero-confidence verdicts, recorded errors). They are not an independent model judgment.
+- The reviewer is deterministic (citations, zero-confidence verdicts, recorded errors). It is not an independent model judgment.
 - Continuous live simulation generates independent chunks; user account and IP histories do not persist across chunk boundaries.
 - ML-only case investigations are capped at 25 per live session.
+- Docker Compose files are provided; verify `docker compose up --build` on your machine if the daemon was not available during development.
+
+## Productization status (plan closed)
+
+Closed against the MVP productization plan:
+
+- React SOC console + FastAPI + SQLAlchemy persistence + Alembic migrations
+- Mock + Haiku providers, deterministic reviewer, evaluation lab, Threat Lab API/UI
+- SOC Live with auto-advance UI and persistence of live cases into the Cases DB
+- CI: pytest + frontend vitest/tsc/build
+- Ground-truth isolation tests preserved
+
+Intentionally deferred (storytelling / post-MVP product polish, not engineering blockers):
+
+- Narrative onboarding / demo script UX
+- Semantic LLM reviewer
+- Distributed workers / Kafka / K8s
+- Stronger visual polish pass beyond the current console
 
 ## Planned Future Work
 
-- **SPA Frontend Redesign**: Replace the preliminary Streamlit UI with a modern, high-performance single-page application.
-- **Production LLM Provider Integration**: Integrate live LLM providers for the Investigator and Scenario Proposer agents with prompt engineering and agentic contract evaluations.
-- **Production Data Infrastructure**: Implement streaming event ingestion (e.g., Kafka), persistent account/IP feature stores across simulation chunks, and Kubernetes deployment manifests.
-- **Advanced Machine Learning**: Implement unsupervised anomaly detection, online model adaptation, and cross-feature anomaly scoring beyond synthetic rule boundaries.
+- Optional semantic LLM reviewer (deterministic reviewer remains the primary audit).
+- Persistent account/IP feature stores across continuous live chunks.
+- Streaming ingestion / distributed workers (explicitly out of MVP scope).
+- Advanced ML beyond the supervised synthetic baseline.
+- Product storytelling / guided demo narrative in the UI.
+
+## Architecture notes (productization)
+
+- Domain engine stays in `src/login_anomaly/` (simulation, detection, ML, correlation, agentic, live, evaluation).
+- New layers: `api/` (FastAPI), `services/` (orchestration), `persistence/` (SQLAlchemy), `frontend/` (React).
+- Streamlit dashboard remains available as a secondary demo UI.
+- Visual language for the React console follows OnTimeAI-Frontend cues: light neutral chrome, near-black primary, color reserved for risk/verdict semantics.

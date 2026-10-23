@@ -54,7 +54,17 @@ def test_input_contract_has_no_scenario_or_label_fields() -> None:
 
 def test_result_fields_are_exact() -> None:
     names = {f.name for f in dataclasses.fields(InvestigationResult)}
-    assert names == {"alert_id", "verdict", "confidence", "evidence", "tool_calls", "justification", "limitations"}
+    assert names == {
+        "alert_id",
+        "verdict",
+        "confidence",
+        "evidence",
+        "tool_calls",
+        "justification",
+        "limitations",
+        "risk_level",
+        "hypotheses",
+    }
 
 
 def test_valid_result_is_accepted() -> None:

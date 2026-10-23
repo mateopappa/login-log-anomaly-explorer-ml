@@ -17,5 +17,16 @@ dist/
 .env.*.local
 .claude/settings.local.json
 
+# Local visual reference clone (not part of the product)
+.ref-ontimeai/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Local DB / runtime
+*.db
+data/
+
 # OS
 .DS_Store
