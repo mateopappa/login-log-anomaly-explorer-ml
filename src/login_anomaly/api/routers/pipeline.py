@@ -27,11 +27,18 @@ def pipeline_status() -> dict[str, Any]:
     return {
         "title": "Multi-site event pipeline",
         "summary": (
-            "Five synthetic tenants publish AuthEvents to a Kafka-compatible broker (Redpanda). "
+            "Five synthetic tenants publish AuthEvents to Redpanda. "
             "A worker consumes each site topic, runs the rule detector, and exports Prometheus metrics. "
-            "Grafana visualizes throughput and alerts. Kubernetes is the production deployment story — "
-            "local demo uses Docker Compose."
+            "This path does not write cases to Postgres — seed and SOC Live own persistence. "
+            "Compose runs the broker path locally; managed Kafka + consumer HPA is a natural production mapping, not in-repo."
         ),
+        "scope": {
+            "persists_cases": False,
+            "runs_ml": False,
+            "runs_rules": True,
+            "exports_metrics": True,
+            "product_case_path": "seed / SOC Live → Postgres",
+        },
         "broker": {
             "kind": "redpanda",
             "kafka_api": kafka_bootstrap,
@@ -54,9 +61,9 @@ def pipeline_status() -> dict[str, Any]:
             "Open Redpanda Console to inspect topics and messages",
         ],
         "k8s_narrative": (
-            "In production, each site/subsidiary would run producers as Deployments, "
-            "the broker as a managed Kafka/Redpanda cluster, and workers as a consumer group "
-            "with HPA. This repo keeps that as the story; Compose proves the event path locally."
+            "A production mapping would place site producers near each subsidiary, "
+            "a managed Kafka/Redpanda cluster as the bus, and a consumer group with HPA. "
+            "This repo does not ship Kubernetes manifests — Compose is the executable proof."
         ),
     }
 

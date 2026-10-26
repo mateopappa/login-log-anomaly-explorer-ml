@@ -247,6 +247,7 @@ export type StoryBeat = {
   headline: string;
   line: string;
   blocks: string[];
+  say?: string;
   cta?: { label: string; route: string };
 };
 
@@ -265,6 +266,13 @@ export type TrustResponse = {
 export type PipelineStatus = {
   title: string;
   summary: string;
+  scope?: {
+    persists_cases: boolean;
+    runs_ml: boolean;
+    runs_rules: boolean;
+    exports_metrics: boolean;
+    product_case_path: string;
+  };
   broker: { kind: string; kafka_api: string; console_url: string; protocol: string };
   observability: {
     prometheus_url: string;

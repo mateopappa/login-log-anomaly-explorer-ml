@@ -1,4 +1,9 @@
-"""Consume multi-tenant auth streams, run rule detection, expose Prometheus metrics."""
+"""Consume multi-tenant auth streams, run rule detection, expose Prometheus metrics.
+
+Product boundary: this path is observability + rule detection only.
+It does not persist events/cases to Postgres and does not run ML.
+Seed / SOC Live remain the case-persistence product paths.
+"""
 
 from __future__ import annotations
 
@@ -9,10 +14,51 @@ import sys
 from typing import Sequence
 
 from login_anomaly.detection.rules import detect
+from login_anomaly.events import AuthEvent
 from login_anomaly.pipeline.envelope import StreamEnvelope
 from login_anomaly.pipeline.http_metrics import start_metrics_server
 from login_anomaly.pipeline.metrics import PipelineMetrics
 from login_anomaly.tenants import TENANTS
+
+
+def process_batch(
+    *,
+    tenant_id: str,
+    events: Sequence[AuthEvent],
+    metrics: PipelineMetrics,
+) -> int:
+    """Run rule detection on a buffered batch. Returns alert count. Testable without Kafka."""
+    if not events:
+        return 0
+    alerts = detect(tuple(events))
+    if alerts:
+        metrics.record_alert(tenant_id, len(alerts))
+    return len(alerts)
+
+
+def handle_raw_message(
+    *,
+    raw: bytes,
+    buffers: dict[str, list[AuthEvent]],
+    metrics: PipelineMetrics,
+    flush_every: int = 25,
+) -> int | None:
+    """Decode one broker message into buffers; flush when full. Returns alerts if flushed."""
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+        envelope = StreamEnvelope.from_dict(payload)
+    except Exception:  # noqa: BLE001 — keep consuming on bad messages
+        metrics.record_decode_error()
+        return None
+
+    metrics.record_consumed(envelope.tenant_id)
+    buffers.setdefault(envelope.topic, []).append(envelope.event)
+    bucket = buffers[envelope.topic]
+    if len(bucket) < flush_every:
+        return None
+    count = process_batch(tenant_id=envelope.tenant_id, events=bucket, metrics=metrics)
+    buffers[envelope.topic] = []
+    return count
 
 
 def run_consumer(
@@ -33,32 +79,22 @@ def run_consumer(
         value_deserializer=lambda raw: raw,
     )
     print(f"worker: consuming topics={list(topics)} group={group_id}", flush=True)
-    buffers: dict[str, list] = {topic: [] for topic in topics}
+    buffers: dict[str, list[AuthEvent]] = {topic: [] for topic in topics}
     flush_every = 25
 
     try:
         for message in consumer:
-            try:
-                payload = json.loads(message.value.decode("utf-8"))
-                envelope = StreamEnvelope.from_dict(payload)
-            except Exception as exc:  # noqa: BLE001 — keep consuming on bad messages
-                metrics.record_decode_error()
-                print(f"worker: decode error: {exc}", flush=True)
-                continue
-
-            metrics.record_consumed(envelope.tenant_id)
-            buffers.setdefault(envelope.topic, []).append(envelope.event)
-            bucket = buffers[envelope.topic]
-            if len(bucket) >= flush_every:
-                alerts = detect(tuple(bucket))
-                if alerts:
-                    metrics.record_alert(envelope.tenant_id, len(alerts))
-                    print(
-                        f"worker: tenant={envelope.tenant_id} batch={len(bucket)} "
-                        f"rule_alerts={len(alerts)}",
-                        flush=True,
-                    )
-                buffers[envelope.topic] = []
+            count = handle_raw_message(
+                raw=message.value,
+                buffers=buffers,
+                metrics=metrics,
+                flush_every=flush_every,
+            )
+            if count:
+                print(
+                    f"worker: flushed rule_alerts={count}",
+                    flush=True,
+                )
     finally:
         consumer.close()
 

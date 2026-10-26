@@ -87,7 +87,7 @@ export function CaseDetailPage() {
             {busy === "haiku" ? "Running…" : "Investigate (Haiku)"}
           </button>
           <button className="btn btn-xl" disabled={busy !== null || !run} onClick={() => void evaluate()}>
-            {busy === "evaluate" ? "Scoring…" : "Evaluate vs GT"}
+            {busy === "evaluate" ? "Scoring…" : "Score vs labels"}
           </button>
         </div>
       </header>
@@ -174,8 +174,8 @@ export function CaseDetailPage() {
         <section className="panel stack case-eval">
           <div className="section-head">
             <div>
-              <p className="eyebrow">Offline evaluation</p>
-              <h2 style={{ margin: 0, fontSize: "1.05rem" }}>This case vs ground truth</h2>
+              <p className="eyebrow">Label check</p>
+              <h2 style={{ margin: 0, fontSize: "1.05rem" }}>Verdict vs ground truth</h2>
             </div>
             <span className={`badge ${evaluation.metrics.verdict_match === "correct" ? "benign" : evaluation.metrics.verdict_match === "incorrect" ? "malicious" : "inconclusive"}`}>
               {evaluation.metrics.verdict_match}

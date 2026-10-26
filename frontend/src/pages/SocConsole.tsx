@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { api, type DemoPathResponse, type SocSummary, type TrustResponse } from "../api/client";
-import { DemoPath } from "../components/DemoPath";
-import { TrustPanel } from "../components/TrustPanel";
+import { api, type LiveSnapshot, type SocSummary } from "../api/client";
+
+function simLabel(snap: LiveSnapshot | null): string {
+  if (!snap) return "—";
+  if (!snap.active) return snap.state === "completed" ? "done" : "idle";
+  return String(snap.state || "running");
+}
 
 export function SocConsole() {
   const [searchParams] = useSearchParams();
   const [summary, setSummary] = useState<SocSummary | null>(null);
-  const [demo, setDemo] = useState<DemoPathResponse | null>(null);
-  const [trust, setTrust] = useState<TrustResponse | null>(null);
+  const [live, setLive] = useState<LiveSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [seed, setSeed] = useState(() => {
@@ -20,10 +23,9 @@ export function SocConsole() {
   async function load() {
     try {
       setError(null);
-      const [sum, demoPath, trustModel] = await Promise.all([api.summary(), api.demoPath(), api.trust()]);
+      const [sum, snap] = await Promise.all([api.summary(), api.liveStatus()]);
       setSummary(sum);
-      setDemo(demoPath);
-      setTrust(trustModel);
+      setLive(snap);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -31,6 +33,8 @@ export function SocConsole() {
 
   useEffect(() => {
     void load();
+    const id = window.setInterval(() => void load(), 5000);
+    return () => window.clearInterval(id);
   }, []);
 
   async function seedDemo(nextSeed = seed) {
@@ -53,35 +57,32 @@ export function SocConsole() {
   }, [searchParams, seed]);
 
   const hasCases = (summary?.cases_total ?? 0) > 0;
+  const investigator = summary?.investigator.haiku_configured ? "Haiku" : "Mock";
 
   return (
     <div>
       <header className="page-header hero-header">
         <div>
-          <p className="eyebrow">Login Anomaly Explorer</p>
-          <h1>See suspicious logins. Prove the detection.</h1>
-          <p>One seed. Five sites. Independent detectors. A bounded investigator.</p>
+          <p className="eyebrow">Console</p>
+          <h1>Operations</h1>
         </div>
         <div className="hero-actions">
           <label className="seed-field">
             Seed
             <input
               type="number"
+              name="seed"
               min={0}
               value={seed}
+              autoComplete="off"
+              spellCheck={false}
               onChange={(e) => setSeed(Number(e.target.value))}
               disabled={busy}
             />
           </label>
           <button className="btn primary btn-xl" onClick={() => void seedDemo()} disabled={busy}>
-            {busy ? "Seeding…" : hasCases ? "Reseed" : "Start demo"}
+            {busy ? "Loading…" : hasCases ? "Reseed" : "Load"}
           </button>
-          <Link className="btn btn-xl" to="/pipeline">
-            Live streams
-          </Link>
-          <Link className="btn btn-xl" to="/story">
-            Presenter
-          </Link>
         </div>
       </header>
 
@@ -89,10 +90,10 @@ export function SocConsole() {
       {!summary && !error && <div className="empty">Loading…</div>}
 
       {summary && (
-        <div className="stack">
+        <div className="stack stack-loose">
           <div className="grid metrics">
             <div className="metric">
-              <label>Open cases</label>
+              <label>Open</label>
               <strong>{summary.cases_open}</strong>
             </div>
             <div className="metric">
@@ -101,78 +102,30 @@ export function SocConsole() {
             </div>
             <div className="metric">
               <label>Investigator</label>
-              <strong>{summary.investigator.haiku_configured ? "Haiku" : "Mock"}</strong>
+              <strong>{investigator}</strong>
             </div>
             <div className="metric">
-              <label>Live</label>
-              <strong>{summary.services.live}</strong>
+              <label>Sim</label>
+              <strong>{simLabel(live)}</strong>
             </div>
           </div>
 
-          {demo && (
-            <DemoPath
-              pitch={demo.pitch}
-              steps={demo.steps}
-              talkingPoints={demo.talking_points}
-              presenterRoute={demo.presenter_route ?? "/story"}
-              primaryAction={{
-                label: hasCases ? "Reseed world" : "Seed world",
-                onClick: () => void seedDemo(),
-                busy,
-              }}
-            />
-          )}
-
-          {trust && <TrustPanel title={trust.title} bullets={trust.bullets} />}
-
-          <section>
-            <div className="section-head">
-              <h2>Recent cases</h2>
-              <Link className="btn btn-lg" to="/cases">
-                All cases
-              </Link>
-            </div>
-            {summary.recent_cases.length === 0 ? (
-              <div className="empty empty-cta">
-                <p>No cases yet.</p>
-                <button className="btn primary btn-xl" onClick={() => void seedDemo()} disabled={busy}>
-                  {busy ? "Seeding…" : "Start demo"}
-                </button>
-              </div>
+          <div className="ops-actions">
+            {hasCases ? (
+              <>
+                <Link className="btn primary btn-xl" to="/cases">
+                  Cases
+                </Link>
+                <Link className="btn btn-xl" to="/detection">
+                  Live
+                </Link>
+              </>
             ) : (
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Case</th>
-                      <th>Kind</th>
-                      <th>Priority</th>
-                      <th>Verdict</th>
-                      <th>Mode</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {summary.recent_cases.map((row) => {
-                      const id = String(row.case_id);
-                      return (
-                        <tr key={id}>
-                          <td className="mono">
-                            <Link to={`/cases/${id}`}>{id.slice(0, 18)}…</Link>
-                          </td>
-                          <td>{String(row.kind)}</td>
-                          <td>{String(row.priority)}</td>
-                          <td>
-                            <span className={`badge ${String(row.verdict ?? "")}`}>{String(row.verdict ?? "—")}</span>
-                          </td>
-                          <td>{String(row.mode ?? "—")}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              <p className="muted" style={{ margin: 0 }}>
+                No cases. Load a dataset, then open Cases or Live.
+              </p>
             )}
-          </section>
+          </div>
         </div>
       )}
     </div>

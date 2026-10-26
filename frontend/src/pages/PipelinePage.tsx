@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, type PipelineStatus } from "../api/client";
-import { ArchStrip } from "../components/ArchStrip";
+import { PipelineFlow } from "../components/PipelineFlow";
 
 export function PipelinePage() {
   const [status, setStatus] = useState<PipelineStatus | null>(null);
@@ -28,20 +28,15 @@ export function PipelinePage() {
     <div>
       <header className="page-header hero-header">
         <div>
-          <p className="eyebrow">Multi-site streams</p>
-          <h1>Five producers. One broker. Real detection.</h1>
-          <p>Synthetic AuthEvents from HQ + regional sites through Redpanda.</p>
+          <p className="eyebrow">Pipeline</p>
+          <h1>Site feeds</h1>
         </div>
         <div className="hero-actions">
-          <span className={`pulse-badge ${live ? "on" : "off"}`}>
-            <span className="pulse-dot" />
-            {live ? "Worker live" : "Worker offline"}
-          </span>
           <button className="btn btn-lg" onClick={() => void load()}>
             Refresh
           </button>
           <Link className="btn primary btn-xl" to="/detection">
-            Open SOC Live
+            Live
           </Link>
         </div>
       </header>
@@ -50,44 +45,49 @@ export function PipelinePage() {
       {!status && !error && <div className="empty">Loading…</div>}
 
       {status && (
-        <div className="stack">
-          <ArchStrip />
-          <div className="cta-row">
-            <a className="btn btn-xl" href={status.broker.console_url} target="_blank" rel="noreferrer">
-              Redpanda Console
-            </a>
-            <a className="btn btn-xl" href={status.observability.grafana_url} target="_blank" rel="noreferrer">
-              Grafana
-            </a>
-            <a className="btn btn-xl" href={status.observability.prometheus_url} target="_blank" rel="noreferrer">
-              Prometheus
-            </a>
-          </div>
+        <div className="stack stack-loose">
+          <PipelineFlow
+            workerLive={live}
+            links={{
+              redpanda: status.broker.console_url,
+              grafana: status.observability.grafana_url,
+              prometheus: status.observability.prometheus_url,
+            }}
+          />
 
           {!live && (
-            <div className="panel callout">
-              <strong>Start streams</strong>
+            <p className="muted start-hint">
+              Streams offline. In a terminal:{" "}
               <code className="mono">docker compose --profile pipeline up -d</code>
-            </div>
+            </p>
           )}
 
           <section>
             <div className="section-head">
-              <h2>Sites</h2>
-              <span className="muted">{status.tenants.length} topics</span>
+              <h2>Topics</h2>
+              <span className="muted">{status.tenants.length}</span>
             </div>
-            <div className="tenant-grid">
-              {status.tenants.map((tenant) => (
-                <article key={tenant.tenant_id} className={`tenant-card ${live ? "live" : ""}`}>
-                  <div className="tenant-card-top">
-                    <span className={`pulse-dot ${live ? "on" : ""}`} />
-                    <span className="badge">{tenant.kind}</span>
-                    <span className="muted">{tenant.region}</span>
-                  </div>
-                  <strong>{tenant.display_name}</strong>
-                  <code className="mono">{tenant.topic}</code>
-                </article>
-              ))}
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Site</th>
+                    <th>Region</th>
+                    <th>Kind</th>
+                    <th>Topic</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {status.tenants.map((tenant) => (
+                    <tr key={tenant.tenant_id}>
+                      <td>{tenant.display_name}</td>
+                      <td>{tenant.region}</td>
+                      <td>{tenant.kind}</td>
+                      <td className="mono">{tenant.topic}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </section>
         </div>

@@ -108,8 +108,8 @@ def data_explainer() -> dict[str, object]:
             "generate(seed, plan) → observable events",
             "rules + ML detectors (independent)",
             "exact event-id correlation → cases",
-            "bounded investigator (mock or Claude Haiku) + deterministic reviewer",
-            "evaluation may join ground truth only after the run",
+            "tool-gated investigator (mock or Claude Haiku) + deterministic reviewer",
+            "labels may join only after the run for scoring",
         ],
         "live_vs_seed": {
             "seed_demo": "Batch snapshot persisted to the database for the Cases workbench.",

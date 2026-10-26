@@ -38,11 +38,10 @@ export function ThreatLab() {
     <div className="stack">
       <header className="page-header hero-header">
         <div>
-          <p className="eyebrow">Adversarial eval</p>
+          <p className="eyebrow">Threat</p>
           <h1>Threat Lab</h1>
-          <p>Offline catalog scored against ground truth — not the live broker.</p>
         </div>
-        <span className="pulse-badge off">Offline · no Redpanda</span>
+        <span className="pulse-badge off">Offline</span>
       </header>
 
       {error && <div className="error">{error}</div>}

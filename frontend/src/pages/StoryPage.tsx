@@ -83,6 +83,12 @@ export function StoryPage() {
             </span>
           ))}
         </div>
+        {beat.say && (
+          <aside className="story-say" aria-label="Speaker cue">
+            <span className="story-say-label">Decí</span>
+            <p>{beat.say}</p>
+          </aside>
+        )}
         {beat.cta && (
           <Link className="btn primary btn-xl story-cta" to={beat.cta.route}>
             {beat.cta.label}

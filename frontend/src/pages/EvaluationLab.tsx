@@ -42,11 +42,7 @@ export function EvaluationLab() {
   return (
     <div className="stack">
       <header className="page-header">
-        <h1>Evaluation Lab</h1>
-        <p>
-          Reproducible offline benchmarks on a fixed seed. Ground truth is joined only after the label-free workflow
-          finishes. Compare mock vs Haiku on the same scenario configuration.
-        </p>
+        <h1>Scores</h1>
       </header>
       <div className="toolbar">
         <button className="btn primary" disabled={busy !== null} onClick={() => void run("mock")}>

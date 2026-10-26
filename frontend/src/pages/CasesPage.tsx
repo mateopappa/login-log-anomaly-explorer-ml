@@ -18,11 +18,12 @@ export function CasesPage() {
     <div>
       <header className="page-header">
         <h1>Cases</h1>
-        <p>Persisted investigation cases from detection and correlation.</p>
       </header>
       {error && <div className="error">{error}</div>}
       {rows.length === 0 && !error ? (
-        <div className="empty">No cases yet. Seed from the SOC Console.</div>
+        <div className="empty">
+          No cases. <Link to="/">Load a dataset</Link> on Console.
+        </div>
       ) : (
         <div className="table-wrap">
           <table>

@@ -107,9 +107,8 @@ export function DetectionLab() {
     <div className="stack">
       <header className="page-header hero-header">
         <div>
-          <p className="eyebrow">SOC Live</p>
-          <h1>Watch attempts move from origin to account</h1>
-          <p>Failures, travel hops, and rule hits light up as the clock advances.</p>
+          <p className="eyebrow">Live</p>
+          <h1>Live session</h1>
         </div>
       </header>
 
