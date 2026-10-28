@@ -48,16 +48,6 @@ export function ThreatLab() {
 
       <section className="panel stack">
         <div className="toolbar" style={{ marginBottom: 0 }}>
-          <label className="muted">
-            Scenario{" "}
-            <select value={selected} onChange={(e) => setSelected(e.target.value)} disabled={busy || !scenarios.length}>
-              {scenarios.map((row) => (
-                <option key={row.scenario_id} value={row.scenario_id}>
-                  {row.scenario_id}
-                </option>
-              ))}
-            </select>
-          </label>
           <button className="btn primary" disabled={busy || !selected} onClick={() => void run("scenario")}>
             {busy ? "Running…" : "Run scenario"}
           </button>
@@ -89,8 +79,17 @@ export function ThreatLab() {
               </thead>
               <tbody>
                 {scenarios.map((row) => (
-                  <tr key={row.scenario_id} onClick={() => setSelected(row.scenario_id)}>
-                    <td className="mono">{row.scenario_id}</td>
+                  <tr key={row.scenario_id} className={selected === row.scenario_id ? "selected" : undefined}>
+                    <td className="mono">
+                      <button
+                        type="button"
+                        className="row-select"
+                        aria-pressed={selected === row.scenario_id}
+                        onClick={() => setSelected(row.scenario_id)}
+                      >
+                        {row.scenario_id}
+                      </button>
+                    </td>
                     <td>{row.strategy}</td>
                     <td className="mono">{row.seeds.join(", ")}</td>
                     <td>{row.tags.join(", ")}</td>

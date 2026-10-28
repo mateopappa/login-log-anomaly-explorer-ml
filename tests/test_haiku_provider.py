@@ -97,6 +97,73 @@ def test_haiku_requests_tool_then_final(monkeypatch: pytest.MonkeyPatch) -> None
     assert fake.messages.calls == 2
 
 
+def _provider(responses: list[object]) -> tuple[HaikuInvestigatorProvider, _FakeClient]:
+    from login_anomaly.agentic.haiku_provider import ProviderUsage
+
+    fake = _FakeClient(responses)
+    provider = HaikuInvestigatorProvider.__new__(HaikuInvestigatorProvider)
+    provider.api_key = "test-key"
+    provider.model = "claude-haiku-5-5"
+    provider.mode = "llm"
+    provider.provider_id = "anthropic-haiku"
+    provider.max_tokens = 1024
+    provider.usage = ProviderUsage()
+    provider._client = fake
+    provider._messages = []
+    provider._pending_tool_use_id = None
+    provider._observation_count = 0
+    return provider, fake
+
+
+def test_haiku_reads_a_json_object_wrapped_in_prose() -> None:
+    body = (
+        "Finding:\n```json\n"
+        '{"verdict":"malicious","confidence":"0.8","risk_level":"HIGH",'
+        '"evidence":[{"event_id":"evt-1","field":"outcome","summary":"Repeated failures."}, "skip"],'
+        '"justification":"Failures pile up from one IP.","limitations":["Synthetic."],'
+        '"hypotheses":[{"statement":"Password spray.","stance":"supports","evidence_event_ids":["evt-1"]}]}\n'
+        "```\nThat is the write-up."
+    )
+    provider, fake = _provider(
+        [SimpleNamespace(content=[_FakeBlock(type="text", text=body)], usage=SimpleNamespace(input_tokens=4, output_tokens=8))]
+    )
+    action = provider.next_action(_case(), ())
+    assert isinstance(action, FinalResponse)
+    assert action.result["verdict"] == "malicious"
+    assert action.result["confidence"] == 0.8
+    assert action.result["risk_level"] == "high"
+    assert action.result["alert_id"] == "case-1"
+    assert action.result["evidence"] == [{"event_id": "evt-1", "field": "outcome", "summary": "Repeated failures."}]
+    assert fake.messages.calls == 1
+
+
+def test_truncated_reply_is_not_read_as_a_nested_object() -> None:
+    from login_anomaly.agentic.haiku_provider import _extract_json
+
+    text = '{"verdict":"malicious","evidence":[{"event_id":"evt-1","field":"outcome","summary":"cut'
+    assert _extract_json(text) is None
+
+
+def test_haiku_asks_once_more_when_the_reply_is_not_json() -> None:
+    prose = SimpleNamespace(content=[_FakeBlock(type="text", text="This looks malicious.")], usage=SimpleNamespace(input_tokens=3, output_tokens=4))
+    repaired = SimpleNamespace(
+        content=[
+            _FakeBlock(
+                type="text",
+                text='{"verdict":"benign","confidence":0.4,"justification":"Travel fits the account.","limitations":[]}',
+            )
+        ],
+        usage=SimpleNamespace(input_tokens=5, output_tokens=6),
+    )
+    provider, fake = _provider([prose, repaired])
+    action = provider.next_action(_case(), ())
+    assert isinstance(action, FinalResponse)
+    assert action.result["verdict"] == "benign"
+    assert provider.usage.tokens_in == 8
+    assert provider.usage.tokens_out == 10
+    assert fake.messages.calls == 2
+
+
 def test_haiku_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):

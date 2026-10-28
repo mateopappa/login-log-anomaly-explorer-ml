@@ -102,7 +102,7 @@ Three ways data enters the product:
 | --- | --- | --- |
 | **Seed demo** | Batch generate → detect → correlate → investigate → persist | SOC Console, Cases |
 | **SOC Live** | Time-release events via `advance` (UI auto-ticks) → same pipeline in-process | Detection Lab |
-| **Multi-site pipeline** | 5 tenant producers → Redpanda (Kafka API) → worker → Prometheus/Grafana | Pipeline page |
+| **Five sites** | 5 tenant producers → Redpanda → worker (rules + ML) → the same Cases queue, plus Grafana | Pipeline, Cases |
 
 Pipeline stages stay independent: rules and ML do not fuse scores; the investigator only uses allowlisted read-only tools; the reviewer checks citations/policy without labels.
 
@@ -112,7 +112,7 @@ The SOC Console surfaces a fixed **Demo path**: seed → multi-site streams → 
 
 ### Multi-site event pipeline (optional Compose profile)
 
-Five synthetic sites/subsidiaries (`acme-hq`, `acme-latam`, `acme-emea`, `northwind`, `contoso-jp`) each own a topic. Producers publish namespaced `AuthEvent` envelopes; a worker consumes, runs the rule detector, and exports Prometheus metrics. Grafana ships a provisioned dashboard. **Kubernetes is the production narrative**, not a required local dependency — Compose proves the event-driven path.
+Five synthetic sites (`acme-hq`, `acme-latam`, `acme-emea`, `northwind`, `contoso-jp`) each own a topic and publish in parallel. The worker runs rules and the ML baseline on each finished publish, writes cases into the same queue the console reads, and still exports Prometheus metrics. Grafana ships a provisioned dashboard. **Kubernetes is the production narrative**, not a required local dependency — Compose proves the event-driven path.
 
 ```bash
 # Core product
@@ -170,7 +170,13 @@ mkdir -p data
 cd frontend && npm install && npm run dev
 ```
 
-Open http://localhost:5173. Seed a demo dataset from the SOC Console, open a case, run a mock investigation (or Haiku if `ANTHROPIC_API_KEY` is set).
+Open http://localhost:5173 (Vite) or http://localhost:8080 (Compose). Use `localhost`, not `127.0.0.1`: CORS allows the `localhost` origin.
+
+On Console, **Load batch** (~1800 seeded events) or **Start Live**. Datasets persist. Cases opens on **Live** while a simulation is active, otherwise on **Sites** (the latest publish of each tenant). **Batch** is the seed dataset. **All** keeps history.
+
+The analyst queue is what a detector did not close. `rule_high` stays with the rule detector and is not listed. `rule_medium` is a rule alert that still needs a person. `ml_untriaged` means the model flagged an event that no single rule owns. That word is a place in the queue, not a verdict: the case can still be malicious.
+
+Open a dossier and press **Investigate**. That button calls Claude Haiku when `ANTHROPIC_API_KEY` is set. **Score vs labels** rebuilds ground truth for that one case after the run. On a Live replay, the queue panel shows active, investigated, and still-to-investigate counts, and **Score this run** (`POST /api/v1/live/score`) scores the events this replay has released plus the investigations stored for it. Labels are rebuilt from the seed and the scenario, including the hard ranges when the scenario is Boundary lab, and are not shown to the investigator.
 
 ### Docker Compose
 
@@ -180,7 +186,7 @@ docker compose up --build
 docker compose --profile pipeline up --build
 ```
 
-Core services: Postgres (`5432`), API (`8000`), frontend (`8080`). Migrations run on API start (`alembic upgrade head`). Pipeline profile adds Redpanda, producer, worker, Prometheus, and Grafana (see above).
+Core services: Postgres (`5433` host / `5432` in-compose), API (`8000`), frontend (`8080`). Migrations run on API start (`alembic upgrade head`). Pipeline profile adds Redpanda, producer, worker, Prometheus, and Grafana (see above).
 
 ### Claude Haiku
 
@@ -250,7 +256,11 @@ Manual acceptance checklist (dashboard, default sidebar values):
 
 ## SOC Live
 
-SOC Live transforms the platform into an enterprise security operations center console. Events are streamed over simulated time, and detectors, correlation, and mock investigation agents process incoming activity incrementally.
+SOC Live releases a seeded scenario over simulated time. Each advance runs rules and ML on the retained window, correlates exact event ids, and files cases with a priority. It does not investigate. The analyst opens a dossier and starts Haiku from there.
+
+**Boundary lab** is a replay scenario next to Mixed campaigns. Campaigns sit just outside the rule thresholds, and benign look-alikes are included (typos, roaming, a shared NAT). Scoring that replay uses the same hard ranges the generator used, so the score matches the run.
+
+The React page is **Live** (`/detection`). While the simulation is active it keeps advancing about once a second, including after you leave the tab. **Reset** deletes the cases of that simulation only. Sites and the batch dataset stay.
 
 ### Information Architecture & Visual Hierarchy
 
@@ -268,9 +278,10 @@ The redesigned console organizes security telemetry into clear, prioritized laye
    - Source & playback configuration: Mode (Replay / Continuous), Replay scenario, Seed, Attack families, and Events per second rate slider.
    - Lifecycle controls: **Start**, **Pause** (temporarily stops releases), **Resume** (continues at current position), **Stop** (terminates run), and **Reset** (clears session state to idle).
 
-2. **Dual-Tier Live Metrics**:
-   - **Tier 1 (Operational Ingestion Stream)**: Released events, Processed events, Pending queue, Simulated time (UTC), Elapsed wall time, and Effective release rate.
-   - **Tier 2 (Detection & Triage Pipeline)**: Rule alerts, Open cases (within 2-hour window), Completed investigations, Tool calls (with error tally), and ML-only budget-capped cases.
+2. **What the React console shows while a run is active**:
+   - Released / generated, rule alerts, and simulated time.
+   - Queue cards for this run: active cases, investigated cases, and cases still to investigate.
+   - **Score this run** after events have been released. A finished replay is the number to quote. A run still in progress is marked partial and counts only released events.
 
 3. **Case Triage & Progressive Disclosure Case Dossier**:
    - Replaces raw JSON dumps with a scannable triage table (Case ID, Origin Kind, Priority, Signals, Events, Verdict, Review Quality, Status).
@@ -294,11 +305,11 @@ The redesigned console organizes security telemetry into clear, prioritized laye
 
 ### Operating Semantics & Constraints
 
-- **Event Buffer & Retention Window**: Ingestion maintains a sliding 2-hour simulated-time context window (up to 5,000 events). Events older than 2 hours leave the window; cases whose evidence has expired are marked "closed".
-- **Exact-ID Correlation**: The system matches ML-positive signals to rule alerts using exact event-ID equality. It does not perform fuzzy heuristic clustering.
-- **Investigation Budget**: ML-only cases (frequently false alarms on benign noise) are capped at 25 automated investigations per session to conserve agent resources.
-- **Ground-Truth Isolation**: Runtime modules (`live/`, `workflow.py`, `correlation.py`, `agentic/`, `dashboard/view.py`) strictly never import `evaluation` or ground-truth labels. Label comparison only occurs offline or post-run via `evaluation/live.py`.
-- **Mock Disclosures**: Investigator and Reviewer are deterministic local mocks. No external LLM or API keys are required.
+- **Detector window**: Rules and features look back at most 2 hours of simulated time (hard cap on the buffer). That window is the detector's context. It is not the analyst queue.
+- **Analyst queue**: A `rule_backed` case stays for the session. An `ml_only` case stays after its event leaves the window. It leaves the queue only when a rule case covers that same event. `rule_high` is kept for that bookkeeping and is hidden from the analyst list.
+- **Exact-ID correlation**: An ML positive attaches to a rule alert only when exactly one alert contains that event id. No match, or more than one, stays `ml_only` / `ml_untriaged`. Scores are not fused.
+- **Investigations**: Live does not call the investigator. Five-site ingest still runs the mock investigator so each publish lands as a case plus a deterministic run. Haiku runs only from the dossier button, and CI never receives an API key.
+- **Ground-truth isolation**: Runtime modules do not import `evaluation` or labels. `POST /api/v1/live/score` and per-case **Score vs labels** rebuild labels after the fact.
 
 Commands:
 
@@ -315,8 +326,8 @@ Manual acceptance checklist (SOC Live tab):
 - [ ] **Initial Idle State**: Status reads "No simulation is running", Start is enabled, Pause/Reset disabled, Mock agent banner is prominently displayed.
 - [ ] **Detector Feature Flags**: Toggling Rule-based detector or ML baseline updates the configuration caption immediately ("Rules + ML", "Rules only", "ML only", "Neither detector").
 - [ ] **Ingestion Baseline (Neither detector)**: Unchecking both detectors and clicking Start streams and processes events, while Rule alerts and Cases remain at 0.
-- [ ] **Replay Simulation**: Select scenario "Mixed campaigns", seed 31, rate 5. Press Start. Events stream and metrics advance.
-- [ ] **Case Dossier**: When cases appear, select one in "Inspect case". The Case Dossier displays Origin, Contributing Signals, Events, Mock Reasoning, and Tool Trace without raw JSON clutter.
+- [ ] **Replay Simulation**: Select scenario "Mixed campaigns" or "Boundary lab", pick a seed, press Start. Events stream and the queue cards advance.
+- [ ] **Case Dossier**: Open a queued case. The dossier shows kind, priority, and events. Investigate is manual.
 - [ ] **Lifecycle Controls**: Pause stops event release; Resume continues smoothly; Stop transitions to COMPLETED with "Stopped by user".
 - [ ] **Replay Evaluation**: Click "Score Run Against Ground Truth". Verify separate precision, recall, and F1 metrics for Rule and ML detectors.
 - [ ] **4-Way Benchmark**: Click "Run 4-Way Benchmark". Verify the comparison table displays all 4 variants side-by-side with identical processed counts and expected detector differences.
@@ -335,7 +346,9 @@ src/login_anomaly/
   evaluation/            metrics, experiment, workflow evaluation, Threat Lab runner, evaluation panel
   agentic/               contracts, tools, native investigator, case investigator, reviewer, mock provider
   threat_lab/            scenario catalog, specs, and validated scenario proposals
-  live/                  SOC Live: replay and continuous sources, and the incremental service
+  live/                  SOC Live: replay (including Boundary lab) and continuous sources
+  pipeline/              five-site envelopes, ingest into the case queue, worker
+  api/                   FastAPI routers, including live score
   dashboard/             view logic (no Streamlit) and the Streamlit app
 docs/agentic-evaluators.md   design, diagram, contracts, status
 ```
@@ -366,12 +379,12 @@ The MVP defines three bounded agent roles in the investigation and threat evalua
 - The boundary stress set sits just outside the rule thresholds by design. It shows how fast rules fail at their edge (rules F1 0.01, ML 0.70). It is not evidence of generalization. A real shift test (different attacker behaviour, far from the thresholds) is future work.
 - The ML baseline was trained on the nominal specification only. None of these numbers estimates performance on real logs, and 2 or 3 seeds per evaluation set are too few to rank the methods with confidence.
 - The dashboard seed control stops at 2^53-1, the largest integer a browser number holds exactly. The generator accepts up to 2^63-1.
-- The default investigator is a deterministic mock. It shows the bounded loop, validation, and review contracts. It marks every rule-backed case malicious, so mock case verdicts are not a measure of LLM quality. Claude Haiku is optional via `ANTHROPIC_API_KEY`.
+- The default investigator is a deterministic mock. It marks rule-backed cases with evidence as malicious and abstains on ML-only cases, so mock verdicts are not a measure of LLM quality. Claude Haiku is the dossier action when `ANTHROPIC_API_KEY` is set. A finished Haiku verdict on one case is an anecdote until **Score this run** (or the offline benchmark) is quoted with its seed, scenario, and limits.
 - Case correlation uses exact event-id matches only. An ML signal on an event covered by two alerts stays an ML-only case, with its candidates recorded, rather than being attached to either alert.
 - The reviewer is deterministic (citations, zero-confidence verdicts, recorded errors). It is not an independent model judgment.
-- Continuous live simulation generates independent chunks; user account and IP histories do not persist across chunk boundaries.
-- ML-only case investigations are capped at 25 per live session.
-- Docker Compose files are provided; verify `docker compose up --build` on your machine if the daemon was not available during development.
+- Continuous live simulation generates independent chunks; account and IP histories do not persist across chunk boundaries. Continuous runs are not scored against one static ground truth.
+- History of live cases is capped (`MAX_HISTORY`). A long continuous run drops the oldest cases that are no longer in the detector window.
+- Docker Compose is the local stack. CI publishes the API image to GHCR on a push to `main` after tests pass. The QA deploy job stays off until `QA_API_URL`, `QA_FRONT_URL`, and `RENDER_HOOK_API_QA` are set. The pipeline profile is not part of that deploy.
 
 ## Productization status (plan closed)
 
@@ -379,24 +392,24 @@ Closed against the MVP productization plan:
 
 - React SOC console + FastAPI + SQLAlchemy persistence + Alembic migrations
 - Mock + Haiku providers, deterministic reviewer, evaluation lab, Threat Lab API/UI
-- SOC Live with auto-advance UI and persistence of live cases into the Cases DB
-- CI: pytest + frontend vitest/tsc/build
+- SOC Live with auto-advance, Boundary lab, persistence of the analyst queue, and `POST /api/v1/live/score`
+- Five sites: Redpanda, worker, rules, ML, and mock investigations into the same Cases queue
+- CI: pytest, frontend test/typecheck/build; API image publish on `main`
 - Ground-truth isolation tests preserved
 
-Intentionally deferred (storytelling / post-MVP product polish, not engineering blockers):
+Intentionally deferred:
 
-- Narrative onboarding / demo script UX
 - Semantic LLM reviewer
-- Distributed workers / Kafka / K8s
-- Stronger visual polish pass beyond the current console
+- Kubernetes, and any deploy of the broker
+- Account/IP history across continuous chunks
+- A held-out shift test whose attacks are not defined as "just outside the rule thresholds"
 
 ## Planned Future Work
 
-- Optional semantic LLM reviewer (deterministic reviewer remains the primary audit).
+- Optional semantic LLM reviewer (the deterministic reviewer remains the audit).
 - Persistent account/IP feature stores across continuous live chunks.
-- Streaming ingestion / distributed workers (explicitly out of MVP scope).
+- A real distribution shift, separate from Boundary lab.
 - Advanced ML beyond the supervised synthetic baseline.
-- Product storytelling / guided demo narrative in the UI.
 
 ## Architecture notes (productization)
 

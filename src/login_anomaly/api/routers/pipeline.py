@@ -28,16 +28,16 @@ def pipeline_status() -> dict[str, Any]:
         "title": "Multi-site event pipeline",
         "summary": (
             "Five synthetic tenants publish AuthEvents to Redpanda. "
-            "A worker consumes each site topic, runs the rule detector, and exports Prometheus metrics. "
-            "This path does not write cases to Postgres — seed and SOC Live own persistence. "
+            "A worker consumes each site topic, runs rules and the ML baseline, and writes cases "
+            "into the same SOC queue. Prometheus still receives the rule metrics. "
             "Compose runs the broker path locally; managed Kafka + consumer HPA is a natural production mapping, not in-repo."
         ),
         "scope": {
-            "persists_cases": False,
-            "runs_ml": False,
+            "persists_cases": True,
+            "runs_ml": True,
             "runs_rules": True,
             "exports_metrics": True,
-            "product_case_path": "seed / SOC Live → Postgres",
+            "product_case_path": "five sites / seed / SOC Live → Postgres",
         },
         "broker": {
             "kind": "redpanda",

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet } from "react-router-dom";
 import { api, type LiveSnapshot, type SocSummary } from "../api/client";
 
@@ -11,45 +11,55 @@ const links = [
   { to: "/threat-lab", label: "Threat" },
 ];
 
-function utcClock() {
-  return new Date().toISOString().slice(11, 19) + " UTC";
-}
-
 type TriageStatus = {
   sim: string;
   openCases: number;
   live: boolean;
 };
 
+function applyLive(live: LiveSnapshot, openCases?: number): TriageStatus {
+  const sim = live.active ? String(live.state || "running") : "idle";
+  return {
+    sim,
+    openCases: openCases ?? live.summary?.cases_open ?? 0,
+    live: sim === "running" || sim === "paused",
+  };
+}
+
 export function Layout() {
-  const [clock, setClock] = useState(utcClock);
   const [triage, setTriage] = useState<TriageStatus>({ sim: "idle", openCases: 0, live: false });
+  const simRef = useRef(triage.sim);
+  simRef.current = triage.sim;
 
-  useEffect(() => {
-    const id = window.setInterval(() => setClock(utcClock()), 1000);
-    return () => window.clearInterval(id);
-  }, []);
-
+  // Status + advance live in the shell so leaving Live (dossier, Cases, …) does not pause the sim.
   useEffect(() => {
     let cancelled = false;
+    let inFlight = false;
 
-    async function poll() {
+    async function tick() {
+      if (cancelled || inFlight) return;
+      inFlight = true;
       try {
-        const [live, summary]: [LiveSnapshot, SocSummary] = await Promise.all([api.liveStatus(), api.summary()]);
-        if (cancelled) return;
-        const sim = live.active ? String(live.state || "running") : "idle";
-        setTriage({
-          sim,
-          openCases: summary.cases_open ?? 0,
-          live: sim === "running" || sim === "paused",
-        });
+        if (simRef.current === "running") {
+          const live = await api.liveControl({ action: "advance" });
+          if (!cancelled) setTriage((prev) => applyLive(live, live.summary?.cases_open ?? prev.openCases));
+          return;
+        }
+        const [live, summary]: [LiveSnapshot, SocSummary] = await Promise.all([
+          api.liveStatus(),
+          api.summary(),
+        ]);
+        const openCases = live.active ? live.summary?.cases_open : summary.cases_open;
+        if (!cancelled) setTriage(applyLive(live, openCases ?? 0));
       } catch {
-        if (!cancelled) setTriage((prev) => ({ ...prev, sim: "offline" }));
+        if (!cancelled) setTriage((prev) => ({ ...prev, sim: "offline", live: false }));
+      } finally {
+        inFlight = false;
       }
     }
 
-    void poll();
-    const id = window.setInterval(() => void poll(), 4000);
+    void tick();
+    const id = window.setInterval(() => void tick(), 1000);
     return () => {
       cancelled = true;
       window.clearInterval(id);
@@ -66,6 +76,17 @@ export function Layout() {
           : triage.sim === "offline"
             ? "API down"
             : "Sim idle";
+
+  const canToggle = triage.sim === "running" || triage.sim === "paused";
+
+  async function toggleSim() {
+    try {
+      const live = await api.liveControl({ action: triage.sim === "running" ? "pause" : "resume" });
+      setTriage((prev) => applyLive(live, live.summary?.cases_open ?? prev.openCases));
+    } catch {
+      setTriage((prev) => ({ ...prev, sim: "offline", live: false }));
+    }
+  }
 
   return (
     <div className="app-shell">
@@ -89,17 +110,25 @@ export function Layout() {
           </div>
 
           <div className="topbar-meta">
-            <Link
-              to="/detection"
-              className={`topbar-status ${triage.live ? "live" : triage.sim === "offline" ? "down" : ""}`}
-              title="SOC Live simulation status"
-            >
-              <span className={`pulse-dot ${triage.live && triage.sim === "running" ? "on" : ""}`} />
-              <span>{simLabel}</span>
-              <span className="topbar-status-sep">·</span>
-              <span>{triage.openCases} open</span>
-            </Link>
-            <span className="topbar-clock mono">{clock}</span>
+            {canToggle ? (
+              <button
+                type="button"
+                className={`topbar-status ${triage.live ? "live" : ""}`}
+                onClick={() => void toggleSim()}
+              >
+                <span className={`pulse-dot ${triage.sim === "running" ? "on" : ""}`} />
+                <span>{triage.sim === "running" ? "Pause sim" : "Resume sim"}</span>
+                <span className="topbar-status-sep">·</span>
+                <span>{triage.openCases} open</span>
+              </button>
+            ) : (
+              <span className={`topbar-status ${triage.sim === "offline" ? "down" : ""}`}>
+                <span className="pulse-dot" />
+                <span>{simLabel}</span>
+                <span className="topbar-status-sep">·</span>
+                <span>{triage.openCases} open</span>
+              </span>
+            )}
             <span className="topbar-divider" aria-hidden />
             <Link to="/story" className="topbar-action" title="Presenter mode">
               Present

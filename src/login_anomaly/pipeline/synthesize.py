@@ -12,6 +12,16 @@ from login_anomaly.simulation.scenarios import ScenarioPlan
 from login_anomaly.tenants import Tenant
 
 
+# Same plan for every site publish. Evaluation rebuilds labels from this plan plus the seed.
+SITE_PLAN = ScenarioPlan(
+    bruteforce_campaigns=1,
+    password_spraying_campaigns=1,
+    impossible_travel_campaigns=1,
+    benign_travelers=1,
+)
+SITE_START = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
 def build_tenant_envelopes(
     tenant: Tenant,
     *,
@@ -25,15 +35,11 @@ def build_tenant_envelopes(
     Batches stay large enough for one nominal campaign set (bruteforce + spray
     + travel) so the rule detector has something to fire on in the worker.
     """
-    plan = ScenarioPlan(
-        bruteforce_campaigns=1,
-        password_spraying_campaigns=1,
-        impossible_travel_campaigns=1,
-        benign_travelers=1,
-    )
+    plan = SITE_PLAN
+    seed = base_seed + tenant.seed_offset
     config = GeneratorConfig(
-        seed=base_seed + tenant.seed_offset,
-        start_utc=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        seed=seed,
+        start_utc=SITE_START,
         duration_hours=duration_hours,
         n_accounts=n_accounts,
         n_events=n_events,
@@ -51,6 +57,10 @@ def build_tenant_envelopes(
                 topic=tenant.topic,
                 produced_at_utc=now,
                 event=namespaced,
+                seed=seed,
+                n_events=n_events,
+                n_accounts=n_accounts,
+                duration_hours=duration_hours,
             )
         )
     return envelopes

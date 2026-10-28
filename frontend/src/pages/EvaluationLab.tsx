@@ -14,6 +14,7 @@ export function EvaluationLab() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<"mock" | "haiku" | null>(null);
   const [latest, setLatest] = useState<{ evaluation_id: string; metrics: Metrics } | null>(null);
+  const [seed, setSeed] = useState(42);
 
   async function refresh() {
     setRows(await api.evaluations());
@@ -27,7 +28,7 @@ export function EvaluationLab() {
     setBusy(provider);
     setError(null);
     try {
-      const result = await api.benchmark(42, provider);
+      const result = await api.benchmark(seed, provider);
       setLatest(result as { evaluation_id: string; metrics: Metrics });
       await refresh();
     } catch (err) {
@@ -41,10 +42,34 @@ export function EvaluationLab() {
 
   return (
     <div className="stack">
-      <header className="page-header">
-        <h1>Scores</h1>
+      <header className="page-header hero-header">
+        <div>
+          <p className="eyebrow">Scores</p>
+          <h1>Offline benchmark</h1>
+        </div>
       </header>
+      <section className="panel stack">
+        <p style={{ margin: 0 }}>
+          Scores are <strong>not</strong> the Live session and <strong>not</strong> the Batch seed you
+          just loaded. Each run generates a fresh labelled dataset (~800 events), runs rules +
+          ML + investigations against ground truth, and stores the metrics here.
+        </p>
+        <p className="muted" style={{ margin: 0 }}>
+          Live / Batch are for demo triage. Scores are the held-out quality report for the interview.
+        </p>
+      </section>
       <div className="toolbar">
+        <label className="muted">
+          Seed{" "}
+          <input
+            type="number"
+            min={0}
+            value={seed}
+            style={{ width: "6rem" }}
+            disabled={busy !== null}
+            onChange={(e) => setSeed(Number(e.target.value))}
+          />
+        </label>
         <button className="btn primary" disabled={busy !== null} onClick={() => void run("mock")}>
           {busy === "mock" ? "Running…" : "Benchmark mock"}
         </button>
@@ -66,9 +91,10 @@ export function EvaluationLab() {
                   <th>Precision</th>
                   <th>Recall</th>
                   <th>F1</th>
-                  <th>TP</th>
-                  <th>FP</th>
-                  <th>FN</th>
+                  <th className="num">TP</th>
+                  <th className="num">FP</th>
+                  <th className="num">FN</th>
+                  <th className="num">TN</th>
                 </tr>
               </thead>
               <tbody>
@@ -77,12 +103,13 @@ export function EvaluationLab() {
                   return (
                     <tr key={key}>
                       <td>{key}</td>
-                      <td>{row.precision ?? "—"}</td>
-                      <td>{row.recall ?? "—"}</td>
-                      <td>{row.f1 ?? "—"}</td>
-                      <td>{row.tp ?? "—"}</td>
-                      <td>{row.fp ?? "—"}</td>
-                      <td>{row.fn ?? "—"}</td>
+                      <td className="num">{row.precision ?? "—"}</td>
+                      <td className="num">{row.recall ?? "—"}</td>
+                      <td className="num">{row.f1 ?? "—"}</td>
+                      <td className="num">{row.tp ?? "—"}</td>
+                      <td className="num">{row.fp ?? "—"}</td>
+                      <td className="num">{row.fn ?? "—"}</td>
+                      <td className="num">{row.tn ?? "—"}</td>
                     </tr>
                   );
                 })}
@@ -114,14 +141,31 @@ export function EvaluationLab() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => (
-                  <tr key={String(row.evaluation_id)}>
-                    <td className="mono">{String(row.evaluation_id)}</td>
-                    <td>{String(row.seed)}</td>
-                    <td>{String((row.config as { provider?: string } | undefined)?.provider ?? "—")}</td>
-                    <td className="mono">{String(row.created_at)}</td>
-                  </tr>
-                ))}
+                {rows.map((row) => {
+                  const stored = row.metrics as Metrics | undefined;
+                  const openable = Boolean(stored?.rules);
+                  const id = String(row.evaluation_id);
+                  return (
+                    <tr key={id}>
+                      <td className="mono">
+                        {openable && stored ? (
+                          <button
+                            type="button"
+                            className="row-select"
+                            onClick={() => setLatest({ evaluation_id: id, metrics: stored })}
+                          >
+                            {id}
+                          </button>
+                        ) : (
+                          id
+                        )}
+                      </td>
+                      <td className="num">{String(row.seed)}</td>
+                      <td>{String((row.config as { provider?: string } | undefined)?.provider ?? row.kind ?? "—")}</td>
+                      <td className="mono">{String(row.created_at)}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

@@ -18,6 +18,8 @@ from login_anomaly.live.sources import (
     REPLAY_HOURS,
     REPLAY_SCENARIOS,
     START_UTC,
+    ReplaySource,
+    replay_ranges,
 )
 from login_anomaly.simulation.config import GeneratorConfig
 from login_anomaly.simulation.generator import GeneratedDataset, generate_with_truth
@@ -40,6 +42,8 @@ class CaseQualityMetrics:
     correct: int
     incorrect: int
     inconclusive: int
+    awaiting: int
+    unscored: int
     unsupported_evidence: int
     tool_errors: int
 
@@ -110,17 +114,34 @@ def _detector_metrics(
     )
 
 
-def evaluate_live_replay(service: SimulationService) -> LiveEvaluationResult:
-    """Evaluate a finished replay simulation against ground truth offline.
+def evaluate_live_replay(
+    service: SimulationService,
+    *,
+    investigated: list[tuple[str, list[str]]] | None = None,
+    awaiting: int | None = None,
+) -> LiveEvaluationResult:
+    """Evaluate a replay against ground truth offline.
+
+    Scores only events the replay has already released. ML flags are the ones
+    the live model emitted, including positives whose events have left the
+    two-hour detector window. ``investigated`` is ``(verdict, event_ids)`` for
+    persisted runs. When it is omitted, in-memory runs on the service are used.
 
     Raises ValueError if the service did not run in replay mode.
     """
     if service.config.mode != "replay":
         raise ValueError("Only replay simulations can be evaluated against static ground truth.")
+    source = service._source
+    if not isinstance(source, ReplaySource):
+        raise ValueError("Only replay simulations can be evaluated against static ground truth.")
+    released = source.released_events()
+    if not released:
+        raise ValueError("replay has not released any events yet")
 
     scenario = service.config.scenario
     seed = service.config.seed
     plan = REPLAY_SCENARIOS[scenario]
+    ranges = replay_ranges(scenario)
     config = GeneratorConfig(
         seed=seed,
         start_utc=START_UTC,
@@ -128,11 +149,10 @@ def evaluate_live_replay(service: SimulationService) -> LiveEvaluationResult:
         n_accounts=REPLAY_ACCOUNTS,
         n_events=REPLAY_EVENTS,
     )
-    truth_dataset: GeneratedDataset = generate_with_truth(config, plan)
-    events = truth_dataset.events
+    truth_dataset: GeneratedDataset = generate_with_truth(config, plan, ranges)
     truth = truth_dataset.ground_truth
-    event_ids = [e.event_id for e in events]
-    labels = [1 if truth.label_for(eid).is_malicious else 0 for eid in event_ids]
+    event_ids = [event.event_id for event in released]
+    labels = [1 if truth.label_for(event_id).is_malicious else 0 for event_id in event_ids]
 
     rule_event_ids: set[str] = set()
     if service.config.enable_rules:
@@ -141,32 +161,51 @@ def evaluate_live_replay(service: SimulationService) -> LiveEvaluationResult:
 
     ml_event_ids: set[str] = set()
     if service.config.enable_ml:
-        ml_event_ids.update(service._ml_signals.keys())
+        ml_event_ids.update(service._ml_flagged_ids)
+        ml_event_ids.update(service._ml_signals)
 
     rules_metrics = _detector_metrics(service.config.enable_rules, labels, rule_event_ids, event_ids)
     ml_metrics = _detector_metrics(service.config.enable_ml, labels, ml_event_ids, event_ids)
 
     case_records = list(service._cases.values())
-    case_correct = case_incorrect = case_inconclusive = unsupported = tool_errors = 0
-    for record in case_records:
-        if record.run is None:
+    case_correct = case_incorrect = case_inconclusive = unscored = unsupported = tool_errors = 0
+    if investigated is None:
+        awaiting_count = sum(record.run is None for record in case_records)
+        judged: list[tuple[str, list[str]]] = [
+            (record.run.result.verdict, list(record.case.event_ids))
+            for record in case_records
+            if record.run is not None
+        ]
+        for record in case_records:
+            if record.run is None:
+                continue
+            unsupported += sum(item.event_id not in record.case.event_ids for item in record.run.result.evidence)
+            tool_errors += sum(call.status != "ok" for call in record.run.result.tool_calls)
+        cases_total = len(case_records)
+    else:
+        awaiting_count = awaiting if awaiting is not None else 0
+        judged = investigated
+        cases_total = len(judged) + awaiting_count
+    for verdict, judged_ids in judged:
+        try:
+            expected_malicious = any(truth.label_for(event_id).is_malicious for event_id in judged_ids)
+        except KeyError:
+            unscored += 1
             continue
-        expected_malicious = any(truth.label_for(eid).is_malicious for eid in record.case.event_ids)
-        verdict = record.run.result.verdict
         if verdict == "inconclusive":
             case_inconclusive += 1
         elif (verdict == "malicious") == expected_malicious:
             case_correct += 1
         else:
             case_incorrect += 1
-        unsupported += sum(item.event_id not in record.case.event_ids for item in record.run.result.evidence)
-        tool_errors += sum(call.status != "ok" for call in record.run.result.tool_calls)
 
     case_quality = CaseQualityMetrics(
-        cases_total=len(case_records),
+        cases_total=cases_total,
         correct=case_correct,
         incorrect=case_incorrect,
         inconclusive=case_inconclusive,
+        awaiting=awaiting_count,
+        unscored=unscored,
         unsupported_evidence=unsupported,
         tool_errors=tool_errors,
     )
@@ -191,9 +230,9 @@ def evaluate_live_replay(service: SimulationService) -> LiveEvaluationResult:
         detector_mode=summary["detector_mode"],
         enable_rules=service.config.enable_rules,
         enable_ml=service.config.enable_ml,
-        total_events=len(events),
+        total_events=len(event_ids),
         malicious_events=sum(labels),
-        benign_events=len(events) - sum(labels),
+        benign_events=len(event_ids) - sum(labels),
         rules_metrics=rules_metrics,
         ml_metrics=ml_metrics,
         case_quality=case_quality,

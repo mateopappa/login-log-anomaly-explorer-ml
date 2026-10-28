@@ -7,7 +7,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     const detail = await response.text();
-    throw new Error(detail || `${response.status} ${response.statusText}`);
+    let message = detail;
+    try {
+      const parsed = JSON.parse(detail) as { detail?: unknown };
+      if (typeof parsed.detail === "string") message = parsed.detail;
+    } catch {
+      message = detail;
+    }
+    throw new Error(message || `${response.status} ${response.statusText}`);
   }
   return response.json() as Promise<T>;
 }
@@ -15,6 +22,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export type CaseSummary = {
   case_id: string;
   dataset_id: string;
+  site?: string | null;
   kind: string;
   priority: string;
   status: string;
@@ -129,6 +137,12 @@ export type SocSummary = {
     haiku_model: string | null;
   };
   services: Record<string, string>;
+  active_dataset_id?: string | null;
+  active_seed?: number | null;
+  events_total?: number;
+  cases_by_kind?: Record<string, number>;
+  scope?: "sites" | "latest" | "live" | "all";
+  live_dataset_id?: string | null;
 };
 
 export type LiveSummary = {
@@ -146,6 +160,32 @@ export type LiveSummary = {
   scenario?: string | null;
   message?: string;
   state?: string;
+};
+
+export type LiveDetectorScore = {
+  enabled: boolean;
+  precision: number;
+  recall: number;
+  f1: number;
+  confusion: { tp: number; fp: number; fn: number; tn: number } | null;
+};
+
+export type LiveScore = {
+  scenario: string;
+  seed: number;
+  partial: boolean;
+  note: string;
+  total_events: number;
+  rules: LiveDetectorScore;
+  ml: LiveDetectorScore;
+  case_quality: {
+    cases_total: number;
+    correct: number;
+    incorrect: number;
+    inconclusive: number;
+    awaiting: number;
+    unscored: number;
+  };
 };
 
 export type LiveSnapshot = {
@@ -187,7 +227,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ seed }),
     }),
-  cases: () => request<CaseSummary[]>("/api/v1/cases"),
+  cases: (opts?: { scope?: "sites" | "latest" | "live" | "all" }) => {
+    const scope = opts?.scope ?? "latest";
+    return request<CaseSummary[]>(`/api/v1/cases?scope=${scope}`);
+  },
   caseDetail: (id: string) => request<CaseDetail>(`/api/v1/cases/${id}`),
   investigate: (caseId: string, provider: "mock" | "haiku", idempotencyKey?: string) =>
     request<InvestigationRun>(`/api/v1/cases/${caseId}/investigations`, {
@@ -199,6 +242,8 @@ export const api = {
     return request<CaseEvaluation>(`/api/v1/cases/${caseId}/evaluate${query}`, { method: "POST" });
   },
   liveStatus: () => request<LiveSnapshot>("/api/v1/live/status"),
+  scoreLive: () =>
+    request<{ evaluation_id: string; metrics: LiveScore }>("/api/v1/live/score", { method: "POST" }),
   liveControl: (body: Record<string, unknown>) =>
     request<LiveSnapshot>("/api/v1/live/control", {
       method: "POST",

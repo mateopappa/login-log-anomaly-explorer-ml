@@ -70,6 +70,42 @@ def test_tool_and_step_budgets_stop_the_loop() -> None:
     assert step_limited.errors == ("step budget exhausted",)
 
 
+def test_iso_window_is_accepted_and_a_miss_is_handed_back() -> None:
+    class Seeing(ScriptedProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen: list[tuple] = []
+
+        def next_action(self, case, observations):  # type: ignore[no-untyped-def]
+            self.seen.append(observations)
+            if not observations:
+                return ToolRequest(
+                    "get_account_events",
+                    {
+                        "account_id": "acct-1",
+                        "start": "2026-01-01T00:00:00Z",
+                        "end": "2026-01-01T00:00:00Z",
+                    },
+                )
+            if len(observations) == 1:
+                return ToolRequest(
+                    "get_ip_timeline",
+                    {
+                        "source_ip": "10.9.9.9",
+                        "start": "2026-01-01T00:00:00+00:00",
+                        "end": "2026-01-01T01:00:00+00:00",
+                    },
+                )
+            return final()
+
+    provider = Seeing()
+    run = run_case_investigation(EVENTS, CASE, provider)
+    assert run.result.tool_calls[0].status == "ok"
+    assert run.tool_results[0]["event_id"] == "evt-1"
+    assert provider.seen[2][-1]["status"] == "error"
+    assert any("get_ip_timeline" in error for error in run.errors)
+
+
 def test_provider_exception_is_abstained_not_raised() -> None:
     class FailingProvider(ScriptedProvider):
         def next_action(self, case, observations):  # type: ignore[no-untyped-def]

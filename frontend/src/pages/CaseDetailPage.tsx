@@ -11,6 +11,7 @@ export function CaseDetailPage() {
   const [busy, setBusy] = useState<"mock" | "haiku" | "evaluate" | null>(null);
   const [latest, setLatest] = useState<InvestigationRun | null>(null);
   const [evaluation, setEvaluation] = useState<CaseEvaluation | null>(null);
+  const [haikuOk, setHaikuOk] = useState(false);
 
   async function load() {
     const data = await api.caseDetail(caseId);
@@ -21,6 +22,13 @@ export function CaseDetailPage() {
   useEffect(() => {
     void load().catch((err) => setError(err instanceof Error ? err.message : String(err)));
   }, [caseId]);
+
+  useEffect(() => {
+    void api
+      .ready()
+      .then((ready) => setHaikuOk(ready.investigator.haiku_configured))
+      .catch(() => setHaikuOk(false));
+  }, []);
 
   async function investigate(provider: "mock" | "haiku") {
     setBusy(provider);
@@ -80,17 +88,19 @@ export function CaseDetailPage() {
           </p>
         </div>
         <div className="hero-actions">
-          <button className="btn primary btn-xl" disabled={busy !== null} onClick={() => void investigate("mock")}>
-            {busy === "mock" ? "Running…" : "Investigate (mock)"}
-          </button>
-          <button className="btn btn-xl" disabled={busy !== null} onClick={() => void investigate("haiku")}>
-            {busy === "haiku" ? "Running…" : "Investigate (Haiku)"}
+          <button
+            className="btn primary btn-xl"
+            disabled={busy !== null || !haikuOk}
+            onClick={() => void investigate("haiku")}
+          >
+            {busy === "haiku" ? "Running…" : "Investigate"}
           </button>
           <button className="btn btn-xl" disabled={busy !== null || !run} onClick={() => void evaluate()}>
             {busy === "evaluate" ? "Scoring…" : "Score vs labels"}
           </button>
         </div>
       </header>
+      {!haikuOk && <p className="muted">Haiku needs ANTHROPIC_API_KEY on the server.</p>}
 
       {error && <div className="error">{error}</div>}
 
@@ -135,13 +145,13 @@ export function CaseDetailPage() {
         )}
       </section>
 
-      <details className="panel collapsible">
-        <summary>
-          <strong>Related events</strong>
+      <section className="panel">
+        <div className="section-head">
+          <h2 style={{ margin: 0, fontSize: "1rem" }}>Related events</h2>
           <span className="muted">
-            {detail.events.length} collapsed · {eventSummary.countries.join(" → ") || "—"}
+            {detail.events.length} · {eventSummary.countries.join(" → ") || "—"}
           </span>
-        </summary>
+        </div>
         <div className="table-wrap" style={{ marginTop: "0.75rem" }}>
           <table>
             <thead>
@@ -168,7 +178,7 @@ export function CaseDetailPage() {
             </tbody>
           </table>
         </div>
-      </details>
+      </section>
 
       {evaluation && (
         <section className="panel stack case-eval">
@@ -369,7 +379,7 @@ export function CaseDetailPage() {
 
       {!run && (
         <div className="empty empty-cta">
-          <p>No investigation yet — run mock or Haiku.</p>
+          <p>No investigation yet. Run it when you are ready.</p>
         </div>
       )}
     </div>

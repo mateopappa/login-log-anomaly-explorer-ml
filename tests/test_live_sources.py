@@ -82,4 +82,39 @@ def test_different_seeds_give_different_streams() -> None:
 
 
 def test_replay_scenario_names_are_stable() -> None:
-    assert set(REPLAY_SCENARIOS) == {"Mixed campaigns", "Bruteforce only", "Password spraying only", "Benign only"}
+    assert set(REPLAY_SCENARIOS) == {
+        "Mixed campaigns",
+        "Bruteforce only",
+        "Password spraying only",
+        "Benign only",
+        "Boundary lab",
+    }
+
+
+def test_boundary_lab_replay_matches_the_rebuilt_hard_labels() -> None:
+    from login_anomaly.evaluation.case_score import rebuild_ground_truth
+    from login_anomaly.live.sources import REPLAY_ACCOUNTS, REPLAY_EVENTS, REPLAY_HOURS, replay_ranges
+    from login_anomaly.simulation.config import GeneratorConfig
+    from login_anomaly.simulation.generator import generate_with_truth
+    from login_anomaly.simulation.scenarios import NOMINAL_RANGES
+
+    events = replay_events("Boundary lab", 11)
+    assert len(events) == REPLAY_EVENTS
+    config = GeneratorConfig(
+        seed=11,
+        start_utc=START_UTC,
+        duration_hours=REPLAY_HOURS,
+        n_accounts=REPLAY_ACCOUNTS,
+        n_events=REPLAY_EVENTS,
+    )
+    plan = REPLAY_SCENARIOS["Boundary lab"]
+    hard = generate_with_truth(config, plan, replay_ranges("Boundary lab")).ground_truth
+    nominal = generate_with_truth(config, plan, NOMINAL_RANGES).ground_truth
+    rebuilt = rebuild_ground_truth(11, {"source": "soc_live", "mode": "replay", "scenario": "Boundary lab"})
+
+    def malicious(truth):  # type: ignore[no-untyped-def]
+        return {event.event_id for event in events if truth.label_for(event.event_id).is_malicious}
+
+    assert malicious(rebuilt) == malicious(hard)
+    assert malicious(hard) != malicious(nominal)
+    assert malicious(hard)

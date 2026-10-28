@@ -1,8 +1,13 @@
-name: ci
+name: CI
 
 on:
-  push:
   pull_request:
+  push:
+    branches: [main]
+
+# Tests never receive an Anthropic key. The mock investigator is the CI path.
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -33,3 +38,93 @@ jobs:
           npm test
           npx tsc -b --pretty false
           npm run build
+
+  # Same idea as ingsoft3-tp01: the image is published only after tests, and only
+  # the commit that passed. PRs build nothing to the registry.
+  images:
+    runs-on: ubuntu-latest
+    needs: [test, frontend]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: names
+        run: |
+          repo="$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          echo "api=ghcr.io/${repo}/api" >> "$GITHUB_OUTPUT"
+          echo "front=ghcr.io/${repo}/frontend" >> "$GITHUB_OUTPUT"
+      - name: Publish API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.api
+          push: true
+          tags: ${{ steps.names.outputs.api }}:sha-${{ github.sha }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          file: frontend/Dockerfile
+          push: false
+          load: true
+          tags: ${{ steps.names.outputs.front }}:sha-${{ github.sha }}
+          build-args: |
+            VITE_API_BASE=${{ vars.QA_API_URL || 'http://localhost:8000' }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+  # Stays skipped until the repo has a QA URL and a Render deploy hook.
+  # Redpanda, the worker, and Grafana stay on Compose. They are not this job.
+  deploy-qa:
+    runs-on: ubuntu-latest
+    needs: images
+    if: github.ref == 'refs/heads/main' && vars.QA_API_URL != '' && vars.QA_FRONT_URL != ''
+    environment: qa
+    concurrency:
+      group: deploy-qa
+      cancel-in-progress: false
+    steps:
+      - name: Deploy the API image that just passed CI
+        env:
+          HOOK_API: ${{ secrets.RENDER_HOOK_API_QA }}
+        run: |
+          if [ -z "$HOOK_API" ]; then
+            echo "Falta el secret RENDER_HOOK_API_QA en el environment qa."
+            exit 1
+          fi
+          repo="$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          img="ghcr.io/${repo}/api:sha-${{ github.sha }}"
+          echo "Deploy QA api: $img"
+          curl -fsS --max-time 30 --get --data-urlencode "imgURL=$img" "$HOOK_API"
+      - name: Smoke
+        env:
+          URL_API: ${{ vars.QA_API_URL }}
+          URL_FRONT: ${{ vars.QA_FRONT_URL }}
+        run: |
+          echo "Esperando $URL_API y $URL_FRONT ..."
+          for i in $(seq 1 30); do
+            health="$(curl -fsS --max-time 10 "$URL_API/api/v1/health" 2>/dev/null || true)"
+            ready="$(curl -fsS --max-time 10 "$URL_API/api/v1/ready" 2>/dev/null || true)"
+            if echo "$health" | grep -q '"status":"ok"' \
+               && echo "$ready" | grep -q '"database":"ok"' \
+               && curl -fsS --max-time 10 "$URL_FRONT/" > /dev/null; then
+              echo "$health"
+              echo "$ready"
+              echo "QA responde"
+              exit 0
+            fi
+            echo "intento $i/30 health=$health ready=$ready"
+            sleep 20
+          done
+          echo "QA no respondio a tiempo"
+          exit 1

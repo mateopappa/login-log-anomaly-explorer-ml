@@ -56,7 +56,14 @@ def rebuild_ground_truth(seed: int, config: dict[str, Any]) -> GroundTruth:
         if mode != "replay":
             raise CaseScoreError("only SOC Live replay cases can be scored offline (not continuous)")
         scenario = str(config.get("scenario") or "Mixed campaigns")
-        from login_anomaly.live.sources import REPLAY_ACCOUNTS, REPLAY_EVENTS, REPLAY_HOURS, REPLAY_SCENARIOS, START_UTC
+        from login_anomaly.live.sources import (
+            REPLAY_ACCOUNTS,
+            REPLAY_EVENTS,
+            REPLAY_HOURS,
+            REPLAY_SCENARIOS,
+            START_UTC,
+            replay_ranges,
+        )
 
         if scenario not in REPLAY_SCENARIOS:
             raise CaseScoreError(f"unknown live scenario: {scenario}")
@@ -67,7 +74,7 @@ def rebuild_ground_truth(seed: int, config: dict[str, Any]) -> GroundTruth:
             n_accounts=REPLAY_ACCOUNTS,
             n_events=REPLAY_EVENTS,
         )
-        return generate_with_truth(gen_config, REPLAY_SCENARIOS[scenario]).ground_truth
+        return generate_with_truth(gen_config, REPLAY_SCENARIOS[scenario], replay_ranges(scenario)).ground_truth
 
     raise CaseScoreError("dataset config does not include enough provenance to rebuild ground truth")
 
@@ -91,8 +98,19 @@ def score_case_investigation(
 ) -> dict[str, Any]:
     """Return a structured offline score for one case investigation run."""
     truth = rebuild_ground_truth(seed, dataset_config)
+    tenant_id = str(dataset_config.get("tenant_id") or "")
+    prefix = f"{tenant_id}-" if dataset_config.get("source") == "site" and tenant_id else ""
+
+    def _label(event_id: str):
+        try:
+            return truth.label_for(event_id)
+        except KeyError:
+            if prefix and event_id.startswith(prefix):
+                return truth.label_for(event_id[len(prefix) :])
+            raise
+
     try:
-        malicious_ids = frozenset(eid for eid in event_ids if truth.label_for(eid).is_malicious)
+        malicious_ids = frozenset(eid for eid in event_ids if _label(eid).is_malicious)
     except KeyError as exc:
         raise CaseScoreError(
             "case event ids are not in the rebuilt ground truth — dataset seed/config mismatch"

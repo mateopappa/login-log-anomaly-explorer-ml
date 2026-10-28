@@ -19,14 +19,14 @@ This document describes the agentic part of the project. Read the status table f
 | Offline workflow evaluation (labels, after the run) | Implemented, tested | `src/login_anomaly/evaluation/workflow.py` |
 | Scenario Generator Agent (proposal schema) | Implemented, tested on the **mock provider** only; proposals are validated and never executed as code | `src/login_anomaly/threat_lab/proposals.py` |
 | Read-only investigation tools | Implemented, tested, over in-memory observable events (no SQL via tools) | `src/login_anomaly/agentic/tools.py` |
-| Stream pipeline worker | Implemented: Redpanda consume → **rules only** → Prometheus. Does **not** persist cases or run ML | `src/login_anomaly/pipeline/worker.py` |
+| Stream pipeline worker | Implemented: five sites → Redpanda → rules and ML → cases in the SOC queue, plus Prometheus | `src/login_anomaly/pipeline/worker.py`, `pipeline/ingest.py` |
 
 ### Honesty notes
 
-- **Default investigator is mock.** Haiku is an optional adapter (`haiku_provider.py`). Python still enforces allowlists, budgets, and result validation.
-- **CI / default tests do not call Anthropic.** Do not claim Haiku quality without a printed Evaluation Lab run.
-- **Labels stay offline.** Detectors and investigation tools never receive ground truth.
-- **Pipeline ≠ product cases.** Seed and SOC Live write Postgres. The Compose `pipeline` profile proves broker + metrics.
+- **Default investigator is mock.** Haiku is the dossier button when `ANTHROPIC_API_KEY` is set (`haiku_provider.py`). Python still enforces allowlists, budgets, and result validation. The five-site worker calls the mock investigator. SOC Live does not: it files a priority and waits.
+- **CI / default tests do not call Anthropic.** Do not claim Haiku quality without a scored run (per-case **Score vs labels**, or **Score this run** on a finished replay). One write-up is an anecdote.
+- **Labels stay offline.** Detectors and investigation tools never receive ground truth. Live scoring rebuilds labels from the recorded seed and scenario. Boundary lab rebuilds with the hard ranges.
+- **The five sites, the seed, and SOC Live write one case queue.** Cases opens on the active simulation while one is running, otherwise on the latest publish of each site. `rule_high` stays with the detector. `ml_untriaged` is the queue slot for an ML positive that no single rule owns.
 
 ## 2. End-to-end flow
 

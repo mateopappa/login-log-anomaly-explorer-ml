@@ -149,6 +149,7 @@
 
 ## Changelog
 
+- 2026-10-27: Solid top bar (no blur). Active nav stays weight 600. Metric labels and badges at 0.8125rem.
 - 2026-10-26: Console = Operations workspace (seed + metrics + Cases/Live). Kill walkthrough/guardrails/tutorial copy on app pages. Narrative only in Present `/story`.
 - 2026-10-26: Slimmed Pipeline (real flow diagram with obs links labeled by what they show). Removed ArchStrip chip dump.
 - 2026-10-26: Locked light detection lab (user chose option 1). Applied tokens to `frontend/src/index.css`. Adjectives precise/calm/technical/honest/restrained. Teal accent, Source Sans 3 + IBM Plex Mono, signature title underline.

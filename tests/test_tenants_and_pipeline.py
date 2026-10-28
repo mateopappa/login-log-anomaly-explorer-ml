@@ -101,8 +101,8 @@ def test_product_and_pipeline_endpoints(client: TestClient) -> None:
     assert status["broker"]["kind"] == "redpanda"
     assert len(status["topics"]) == 5
     assert "docker compose" in status["how_to_run"][0]
-    assert status["scope"]["persists_cases"] is False
-    assert status["scope"]["runs_ml"] is False
+    assert status["scope"]["persists_cases"] is True
+    assert status["scope"]["runs_ml"] is True
     assert status["scope"]["runs_rules"] is True
     assert "kubernetes" not in status["summary"].lower()
     assert "manifests" in status["k8s_narrative"].lower()

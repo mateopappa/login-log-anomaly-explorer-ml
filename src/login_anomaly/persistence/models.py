@@ -79,6 +79,8 @@ class InvestigationRunRow(Base):
     cost_usd_est: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Event ids this run judged. Null on rows written before the column existed.
+    event_ids_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
     case: Mapped[CaseRow] = relationship(back_populates="runs")
     tool_calls: Mapped[list[ToolCallRow]] = relationship(back_populates="run", order_by="ToolCallRow.seq")

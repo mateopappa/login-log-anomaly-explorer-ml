@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from login_anomaly.events import AuthEvent
 from login_anomaly.simulation.config import MAX_SEED, GeneratorConfig
 from login_anomaly.simulation.generator import generate
-from login_anomaly.simulation.scenarios import ScenarioPlan
+from login_anomaly.simulation.scenarios import HARD_RANGES, NOMINAL_RANGES, ScenarioPlan, ScenarioRanges
 
 START_UTC = datetime(2026, 1, 1, tzinfo=timezone.utc)
 ATTACK_FAMILIES: tuple[str, ...] = ("bruteforce", "password_spraying", "impossible_travel")
@@ -31,7 +31,25 @@ REPLAY_SCENARIOS: dict[str, ScenarioPlan] = {
     "Bruteforce only": ScenarioPlan(bruteforce_campaigns=2),
     "Password spraying only": ScenarioPlan(password_spraying_campaigns=1),
     "Benign only": ScenarioPlan(),
+    # Same edge the offline lab calls boundary_stress_with_decoys: campaigns sit just
+    # outside the rule thresholds, and benign look-alikes (typos, roaming, shared NAT) are included.
+    "Boundary lab": ScenarioPlan(
+        bruteforce_campaigns=3,
+        password_spraying_campaigns=2,
+        impossible_travel_campaigns=3,
+        benign_travelers=5,
+        benign_decoys=6,
+    ),
 }
+
+
+def replay_ranges(scenario: str) -> ScenarioRanges:
+    """Nominal scenarios use the rule thresholds. Boundary lab sits just outside them."""
+    if scenario not in REPLAY_SCENARIOS:
+        raise ValueError(f"unknown replay scenario {scenario!r}")
+    if scenario == "Boundary lab":
+        return HARD_RANGES
+    return NOMINAL_RANGES
 
 # Spraying and travel windows need 2 hours, so a chunk spans 3 hours.
 CHUNK_EVENTS = 120
@@ -45,7 +63,7 @@ def replay_events(scenario: str, seed: int) -> tuple[AuthEvent, ...]:
     if scenario not in REPLAY_SCENARIOS:
         raise ValueError(f"unknown replay scenario {scenario!r}")
     config = GeneratorConfig(seed=seed, start_utc=START_UTC, duration_hours=REPLAY_HOURS, n_accounts=REPLAY_ACCOUNTS, n_events=REPLAY_EVENTS)
-    return generate(config, REPLAY_SCENARIOS[scenario]).events
+    return generate(config, REPLAY_SCENARIOS[scenario], replay_ranges(scenario)).events
 
 
 class ReplaySource:
@@ -65,6 +83,9 @@ class ReplaySource:
         batch = self._events[self._cursor : self._cursor + count]
         self._cursor += len(batch)
         return batch
+
+    def released_events(self) -> tuple[AuthEvent, ...]:
+        return self._events[: self._cursor]
 
 
 class ContinuousSource:

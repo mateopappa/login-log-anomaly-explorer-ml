@@ -64,3 +64,24 @@ def test_evaluate_case_after_investigation(client: TestClient) -> None:
     assert metrics["expected_verdict"] in {"malicious", "benign"}
     assert "policy" in metrics
     assert metrics["event_count"] >= 1
+
+
+def test_evaluate_refuses_when_case_events_change(client: TestClient) -> None:
+    seeded = client.post("/api/v1/soc/seed", json={"seed": 21})
+    assert seeded.status_code == 200, seeded.text
+    case_id = client.get("/api/v1/cases").json()[0]["case_id"]
+    scored = client.post(f"/api/v1/cases/{case_id}/evaluate")
+    assert scored.status_code == 200, scored.text
+
+    from login_anomaly.persistence.db import session_scope
+    from login_anomaly.persistence.models import CaseRow
+
+    url = client.app.state.settings.database_url
+    with session_scope(url) as session:
+        row = session.get(CaseRow, case_id)
+        assert row is not None
+        row.event_ids_json = [*row.event_ids_json, "extra-event-id"]
+
+    again = client.post(f"/api/v1/cases/{case_id}/evaluate")
+    assert again.status_code == 409
+    assert again.json()["detail"] == "case evidence changed since this run; investigate again"

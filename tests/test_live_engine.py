@@ -13,7 +13,6 @@ from login_anomaly.live.engine import (
     EVENT_FEED,
     MAX_BUFFER,
     MAX_HISTORY,
-    MAX_ML_ONLY_INVESTIGATIONS,
     RETENTION,
     LiveConfig,
     SimulationService,
@@ -286,29 +285,54 @@ def test_retained_events_are_inside_the_retention_window() -> None:
     assert summary["retained_events"] < summary["released"]  # old events have left the buffer
 
 
-def test_ml_only_investigations_are_budgeted_and_the_rest_are_recorded_not_investigated() -> None:
+def test_live_cases_are_triaged_and_left_for_a_manual_investigation() -> None:
     service, clock = replay(scenario="Benign only", model=FlagEverything())
     service.start()
     run_to_end(service, clock)
     summary = service.summary()
     ml_only = [case for case in service.cases() if case["kind"] == "ml_only"]
-    assert sum(case["verdict"] != "not investigated" for case in ml_only) <= MAX_ML_ONLY_INVESTIGATIONS
-    assert summary["ml_only_not_investigated"] > 0
-    skipped = next(case for case in ml_only if case["verdict"] == "not investigated")
-    assert skipped["mode"] == "not investigated" and skipped["review"] == "not reviewed"
+    assert ml_only
+    assert all(case["verdict"] == "not investigated" for case in ml_only)
+    assert summary["investigations_completed"] == 0
+    assert summary["ml_only_not_investigated"] == len(service.cases())
+    queued = ml_only[0]
+    assert queued["mode"] == "not investigated" and queued["review"] == "not reviewed"
+    assert queued["priority"] == "ml_untriaged"
 
 
-def test_ml_only_case_is_superseded_while_its_event_is_retained() -> None:
-    # Standalone ML-only records are dropped once their events leave the window, so the
-    # supersession is visible during the run, not in the final snapshot.
+def test_a_rule_case_removes_the_standalone_ml_case_for_the_same_event() -> None:
     service, clock = replay(scenario="Bruteforce only", model=FlagEverything())
     service.start()
-    statuses: set[str] = set()
-    while service.state is SimulationState.RUNNING:
-        clock.now += 1.0
-        service.advance()
-        statuses |= {case["status"] for case in service.cases()}
-    assert "superseded by a rule-backed case" in statuses
+    run_to_end(service, clock)
+    rule_events = {
+        event_id
+        for record in service._cases.values()
+        if record.case.case_kind == "rule_backed"
+        for event_id in record.case.event_ids
+    }
+    assert rule_events
+    for case in service.cases():
+        if case["kind"] != "ml_only":
+            continue
+        record = service.case_record(case["case_id"])
+        assert record is not None
+        assert record.case.event_ids[0] not in rule_events
+        assert case["status"] == "open"
+
+
+def test_ml_only_case_stays_in_the_queue_after_the_event_leaves_the_window() -> None:
+    service, clock = replay(scenario="Benign only", model=FlagEverything())
+    service.start()
+    run_to_end(service, clock)
+    retained = {event.event_id for event in service._buffer}
+    aged_out = [
+        case
+        for case in service.cases()
+        if case["kind"] == "ml_only"
+        and service.case_record(case["case_id"]).case.event_ids[0] not in retained  # type: ignore[union-attr]
+    ]
+    assert aged_out
+    assert service.summary()["ml_only_cases_open"] == sum(case["kind"] == "ml_only" for case in service.cases())
 
 
 def test_rule_and_ml_cases_are_both_present_with_the_real_baseline_model() -> None:
@@ -317,16 +341,19 @@ def test_rule_and_ml_cases_are_both_present_with_the_real_baseline_model() -> No
     service, clock = replay(model=train_baseline()[0])
     service.start()
     run_to_end(service, clock)
-    kinds = {case["kind"] for case in service.cases()}
-    assert kinds == {"rule_backed", "ml_only"}
-    assert {case["mode"] for case in service.cases() if case["verdict"] != "not investigated"} == {"mock"}
+    queued = service.cases()
+    assert queued
+    assert "ml_only" in {case["kind"] for case in queued}
+    assert "rule_high" not in {case["priority"] for case in queued}
+    assert {case["verdict"] for case in queued} == {"not investigated"}
 
 
-def test_every_investigation_is_labelled_as_mock_and_names_its_provider() -> None:
+def test_live_queue_names_the_manual_provider_without_running_it() -> None:
     service, clock = replay(model=FlagEverything())
     service.start()
     run_to_end(service, clock)
     summary = service.summary()
+    assert summary["investigations_completed"] == 0
     assert summary["agent_mode"] == "mock"
     assert summary["provider_id"].startswith("deterministic")
     assert summary["tool_errors"] == 0

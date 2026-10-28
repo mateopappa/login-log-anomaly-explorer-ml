@@ -28,8 +28,8 @@ def seed_demo(session: Session, state: AppState, *, seed: int = 42) -> dict[str,
         seed=seed,
         start_utc=datetime(2026, 1, 1, tzinfo=timezone.utc),
         duration_hours=72,
-        n_accounts=50,
-        n_events=1200,
+        n_accounts=80,
+        n_events=1800,
     )
     dataset = generate(config, plan)
     model = state.ensure_model()

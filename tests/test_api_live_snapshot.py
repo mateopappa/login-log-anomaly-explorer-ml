@@ -80,3 +80,12 @@ def test_idle_snapshot_and_replay_advance(client: TestClient) -> None:
         assert "event_ids" in snap["alerts"][0]
         assert isinstance(snap["alerts"][0]["event_ids"], list)
 
+    scored = client.post("/api/v1/live/score")
+    assert scored.status_code == 200, scored.text
+    metrics = scored.json()["metrics"]
+    assert metrics["partial"] is True
+    assert metrics["rules"]["enabled"] is True
+    assert metrics["ml"]["enabled"] is True
+    assert metrics["case_quality"]["awaiting"] >= 0
+    assert "Ground truth was rebuilt offline" in metrics["note"]
+

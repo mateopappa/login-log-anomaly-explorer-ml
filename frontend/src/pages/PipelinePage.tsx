@@ -29,7 +29,7 @@ export function PipelinePage() {
       <header className="page-header hero-header">
         <div>
           <p className="eyebrow">Pipeline</p>
-          <h1>Site feeds</h1>
+          <h1>Workflow</h1>
         </div>
         <div className="hero-actions">
           <button className="btn btn-lg" onClick={() => void load()}>
