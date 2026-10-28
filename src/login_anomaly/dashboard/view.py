@@ -244,7 +244,7 @@ def live_case_detail(service: SimulationService, case_id: str) -> dict[str, Any]
         "events": list(record.events),
     }
     if record.run is None or record.review is None:
-        detail["note"] = "Not investigated: the ML-only investigation budget for this session was reached."
+        detail["note"] = "Not investigated. The analyst starts it from the dossier."
         return detail
     run, review = record.run, record.review
     detail.update(
