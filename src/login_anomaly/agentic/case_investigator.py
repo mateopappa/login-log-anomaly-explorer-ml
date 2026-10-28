@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from login_anomaly.agentic.cases import CaseInvestigationInput
@@ -37,6 +38,26 @@ def _tool_context(events: tuple[AuthEvent, ...], case: CaseInvestigationInput) -
     # bridge deliberately contains no rule alert text or evaluation data.
     input_ = InvestigationInput(case.case_id, "case", "medium", case.event_ids, case.first_seen, case.last_seen)
     return ToolContext(events, input_)
+
+
+def _coerce_arguments(arguments: Mapping[str, object]) -> dict[str, object]:
+    """Models send window bounds as ISO strings. The tools require UTC datetimes."""
+    parsed: dict[str, object] = {}
+    for key, value in arguments.items():
+        if key in {"start", "end"} and isinstance(value, str):
+            try:
+                moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                parsed[key] = value
+                continue
+            if moment.tzinfo is None:
+                moment = moment.replace(tzinfo=timezone.utc)
+            parsed[key] = moment
+        elif key == "limit" and isinstance(value, str) and value.isdigit():
+            parsed[key] = int(value)
+        else:
+            parsed[key] = value
+    return parsed
 
 
 def _inconclusive(case: CaseInvestigationInput, calls: list[ToolCallRecord], reason: str) -> InvestigationResult:
@@ -86,6 +107,8 @@ def run_case_investigation(
                     tool_calls=tuple(calls),
                     justification=parsed.justification,
                     limitations=parsed.limitations,
+                    risk_level=parsed.risk_level,
+                    hypotheses=parsed.hypotheses,
                 )
             except ValueError as error:
                 errors.append(f"invalid provider result: {error}")
@@ -106,7 +129,7 @@ def run_case_investigation(
             result = _inconclusive(case, calls, errors[-1])
             return CaseInvestigationRun(case, provider.mode, provider.provider_id, result, step + 1, tuple(observations), tuple(errors))
         try:
-            record, rows = TOOLS[action.tool_name](context, **dict(action.arguments))
+            record, rows = TOOLS[action.tool_name](context, **_coerce_arguments(action.arguments))
         except (TypeError, ValueError) as error:
             calls.append(ToolCallRecord(action.tool_name, {key: str(value) for key, value in action.arguments.items()}, "denied"))
             errors.append(f"tool arguments rejected: {error}")
@@ -115,8 +138,17 @@ def run_case_investigation(
         calls.append(record)
         if record.status != "ok":
             errors.append(f"tool returned {record.status}: {action.tool_name}")
-        for row in rows:
-            observations.append(dict(row))
+        # One observation per call, including a failure, so the model receives a tool_result.
+        if record.status == "ok" and len(rows) == 1:
+            observations.append(dict(rows[0]))
+        else:
+            observations.append(
+                {
+                    "tool": action.tool_name,
+                    "status": record.status,
+                    "events": [dict(row) for row in rows],
+                }
+            )
     errors.append("step budget exhausted")
     result = _inconclusive(case, calls, errors[-1])
     return CaseInvestigationRun(case, provider.mode, provider.provider_id, result, max_steps, tuple(observations), tuple(errors))

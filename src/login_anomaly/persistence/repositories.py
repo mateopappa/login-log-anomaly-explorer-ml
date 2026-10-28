@@ -7,7 +7,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from login_anomaly.agentic.case_investigator import CaseInvestigationRun
@@ -54,28 +54,56 @@ def upsert_dataset(session: Session, dataset_id: str, seed: int, config: dict[st
     return row
 
 
-def replace_events(session: Session, dataset_id: str, events: tuple[AuthEvent, ...]) -> None:
-    existing = session.scalars(select(EventRow).where(EventRow.dataset_id == dataset_id)).all()
-    for row in existing:
-        session.delete(row)
-    session.flush()
-    for event in events:
-        session.add(
-            EventRow(
-                dataset_id=dataset_id,
-                event_id=event.event_id,
-                timestamp_utc=event.timestamp_utc,
-                account_id=event.account_id,
-                source_ip=event.source_ip,
-                outcome=event.outcome.value,
-                country_code=event.country_code,
-            )
+def _add_event(session: Session, dataset_id: str, event: AuthEvent) -> None:
+    session.add(
+        EventRow(
+            dataset_id=dataset_id,
+            event_id=event.event_id,
+            timestamp_utc=event.timestamp_utc,
+            account_id=event.account_id,
+            source_ip=event.source_ip,
+            outcome=event.outcome.value,
+            country_code=event.country_code,
         )
+    )
+
+
+def replace_events(session: Session, dataset_id: str, events: tuple[AuthEvent, ...]) -> None:
+    """Replace all events for a dataset. Dedupes by event_id (last write wins)."""
+    from sqlalchemy import delete
+
+    session.execute(delete(EventRow).where(EventRow.dataset_id == dataset_id))
+    session.flush()
+    for event in {event.event_id: event for event in events}.values():
+        _add_event(session, dataset_id, event)
+
+
+def insert_events(session: Session, dataset_id: str, events: tuple[AuthEvent, ...]) -> None:
+    """Insert event ids that are not already stored. Does not delete."""
+    if not events:
+        return
+    existing = set(
+        session.scalars(select(EventRow.event_id).where(EventRow.dataset_id == dataset_id)).all()
+    )
+    for event in events:
+        if event.event_id in existing:
+            continue
+        existing.add(event.event_id)
+        _add_event(session, dataset_id, event)
 
 
 def upsert_case(session: Session, case: InvestigationCase, *, status: str = "open") -> CaseRow:
-    now = _utcnow()
     row = session.get(CaseRow, case.case_id)
+    # Skip the write when the queue would not change. Live calls this every tick.
+    if (
+        row is not None
+        and row.status == status
+        and row.case_kind == case.case_kind
+        and row.priority_hint == case.priority_hint
+        and list(row.event_ids_json or []) == list(case.event_ids)
+    ):
+        return row
+    now = _utcnow()
     payload = {
         "dataset_id": case.dataset_id,
         "case_kind": case.case_kind,
@@ -89,9 +117,9 @@ def upsert_case(session: Session, case: InvestigationCase, *, status: str = "ope
     if row is None:
         row = CaseRow(id=case.case_id, created_at=now, **payload)
         session.add(row)
-    else:
-        for key, value in payload.items():
-            setattr(row, key, value)
+        return row
+    for key, value in payload.items():
+        setattr(row, key, value)
     return row
 
 
@@ -154,6 +182,7 @@ def persist_completed_run(
     run.tokens_out = tokens_out
     run.cost_usd_est = cost_usd_est
     run.completed_at = _utcnow()
+    run.event_ids_json = list(investigation.case.event_ids)
 
     for existing in list(run.tool_calls):
         session.delete(existing)
@@ -207,7 +236,105 @@ def mark_run_failed(session: Session, run: InvestigationRunRow, error: str, *, l
     session.flush()
 
 
-def list_cases(session: Session, *, limit: int = 50) -> list[CaseRow]:
+def _dataset_source(row: DatasetRow) -> str | None:
+    source = (row.config_json or {}).get("source")
+    return str(source) if source is not None else None
+
+
+def _latest_by_source(session: Session, *, live: bool) -> DatasetRow | None:
+    # Few datasets in a demo. Filtering in Python avoids a JSON dialect split.
+    # Site publishes are their own queue, not "the latest batch".
+    for row in session.scalars(select(DatasetRow).order_by(DatasetRow.created_at.desc())).all():
+        source = _dataset_source(row)
+        if source == "site":
+            continue
+        if (source == "soc_live") == live:
+            return row
+    return None
+
+
+def site_datasets(session: Session) -> list[DatasetRow]:
+    rows = session.scalars(select(DatasetRow).order_by(DatasetRow.created_at.desc())).all()
+    return [row for row in rows if _dataset_source(row) == "site"]
+
+
+def latest_site_datasets(session: Session) -> list[DatasetRow]:
+    """Newest publish per site. Older cycles stay in the database for scope=all."""
+    seen: set[str] = set()
+    picked: list[DatasetRow] = []
+    for row in site_datasets(session):
+        tenant = str((row.config_json or {}).get("tenant_id") or row.id)
+        if tenant in seen:
+            continue
+        seen.add(tenant)
+        picked.append(row)
+    return picked
+
+
+def latest_batch_dataset(session: Session) -> DatasetRow | None:
+    return _latest_by_source(session, live=False)
+
+
+def latest_live_dataset(session: Session) -> DatasetRow | None:
+    return _latest_by_source(session, live=True)
+
+
+def count_events(session: Session, dataset_id: str) -> int:
+    stmt = select(func.count()).select_from(EventRow).where(EventRow.dataset_id == dataset_id)
+    return int(session.scalar(stmt) or 0)
+
+
+def count_cases(session: Session, dataset_id: str, *, status: str | None = None) -> int:
+    stmt = select(func.count()).select_from(CaseRow).where(CaseRow.dataset_id == dataset_id)
+    if status is not None:
+        stmt = stmt.where(CaseRow.status == status)
+    return int(session.scalar(stmt) or 0)
+
+
+def cases_by_kind(session: Session, dataset_id: str) -> dict[str, int]:
+    stmt = (
+        select(CaseRow.case_kind, func.count())
+        .where(CaseRow.dataset_id == dataset_id)
+        .group_by(CaseRow.case_kind)
+    )
+    return {str(kind): int(count) for kind, count in session.execute(stmt).all()}
+
+
+def delete_cases_for_dataset(session: Session, dataset_id: str) -> int:
+    """Remove one simulation's cases and their investigations. Other datasets stay."""
+    case_ids = list(session.scalars(select(CaseRow.id).where(CaseRow.dataset_id == dataset_id)))
+    if not case_ids:
+        return 0
+    run_ids = list(session.scalars(select(InvestigationRunRow.id).where(InvestigationRunRow.case_id.in_(case_ids))))
+    if run_ids:
+        session.execute(delete(ToolCallRow).where(ToolCallRow.run_id.in_(run_ids)))
+        session.execute(delete(InvestigationResultRow).where(InvestigationResultRow.run_id.in_(run_ids)))
+        session.execute(delete(ReviewRow).where(ReviewRow.run_id.in_(run_ids)))
+        session.execute(delete(InvestigationRunRow).where(InvestigationRunRow.id.in_(run_ids)))
+    session.execute(delete(CaseRow).where(CaseRow.dataset_id == dataset_id))
+    return len(case_ids)
+
+
+def close_cases_except(session: Session, dataset_id: str, keep_ids: set[str]) -> None:
+    """Close rows the live engine no longer holds (they left the retention window)."""
+    now = _utcnow()
+    rows = session.scalars(
+        select(CaseRow).where(CaseRow.dataset_id == dataset_id, CaseRow.status != "closed")
+    ).all()
+    for row in rows:
+        if row.id not in keep_ids:
+            row.status = "closed"
+            row.updated_at = now
+
+
+def list_cases(
+    session: Session,
+    *,
+    limit: int = 50,
+    dataset_id: str | None = None,
+    dataset_ids: list[str] | None = None,
+    status: str | None = None,
+) -> list[CaseRow]:
     stmt = (
         select(CaseRow)
         .options(selectinload(CaseRow.runs).selectinload(InvestigationRunRow.result))
@@ -215,6 +342,14 @@ def list_cases(session: Session, *, limit: int = 50) -> list[CaseRow]:
         .order_by(CaseRow.updated_at.desc())
         .limit(limit)
     )
+    if dataset_ids is not None:
+        if not dataset_ids:
+            return []
+        stmt = stmt.where(CaseRow.dataset_id.in_(dataset_ids))
+    elif dataset_id is not None:
+        stmt = stmt.where(CaseRow.dataset_id == dataset_id)
+    if status is not None:
+        stmt = stmt.where(CaseRow.status == status)
     return list(session.scalars(stmt).all())
 
 

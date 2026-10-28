@@ -8,6 +8,7 @@ import sys
 import time
 from typing import Sequence
 
+from login_anomaly.pipeline.http_metrics import start_metrics_server
 from login_anomaly.pipeline.metrics import PipelineMetrics
 from login_anomaly.pipeline.synthesize import build_tenant_envelopes
 from login_anomaly.tenants import TENANTS, Tenant, get_tenant
@@ -60,6 +61,7 @@ def run_loop(
     base_seed: int,
     n_events: int,
     tenant_ids: Sequence[str] | None = None,
+    metrics_port: int = 9101,
 ) -> None:
     selected = (
         tuple(get_tenant(tenant_id) for tenant_id in tenant_ids)
@@ -67,6 +69,7 @@ def run_loop(
         else TENANTS
     )
     metrics = PipelineMetrics()
+    start_metrics_server(metrics_port, label="producer")
     cycle = 0
     print(
         f"producer: bootstrap={bootstrap} tenants={len(selected)} "
@@ -103,6 +106,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Comma-separated tenant ids (default: all five)",
     )
     parser.add_argument("--once", action="store_true", help="Publish one batch and exit")
+    parser.add_argument(
+        "--metrics-port",
+        type=int,
+        default=int(os.environ.get("METRICS_PORT", "9101")),
+    )
     args = parser.parse_args(argv)
     tenant_ids = [part.strip() for part in args.tenants.split(",") if part.strip()] or None
     if args.once:
@@ -125,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
         base_seed=args.seed,
         n_events=args.events,
         tenant_ids=tenant_ids,
+        metrics_port=args.metrics_port,
     )
     return 0
 

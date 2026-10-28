@@ -36,28 +36,18 @@ export function ThreatLab() {
 
   return (
     <div className="stack">
-      <header className="page-header">
-        <h1>Threat Lab</h1>
-        <p>
-          Adversarial scenario catalog scored offline against ground truth. Prefer a single scenario for interactive
-          demos; the full catalog is slow by design.
-        </p>
+      <header className="page-header hero-header">
+        <div>
+          <p className="eyebrow">Threat</p>
+          <h1>Threat Lab</h1>
+        </div>
+        <span className="pulse-badge off">Offline</span>
       </header>
 
       {error && <div className="error">{error}</div>}
 
       <section className="panel stack">
         <div className="toolbar" style={{ marginBottom: 0 }}>
-          <label className="muted">
-            Scenario{" "}
-            <select value={selected} onChange={(e) => setSelected(e.target.value)} disabled={busy || !scenarios.length}>
-              {scenarios.map((row) => (
-                <option key={row.scenario_id} value={row.scenario_id}>
-                  {row.scenario_id}
-                </option>
-              ))}
-            </select>
-          </label>
           <button className="btn primary" disabled={busy || !selected} onClick={() => void run("scenario")}>
             {busy ? "Running…" : "Run scenario"}
           </button>
@@ -89,8 +79,17 @@ export function ThreatLab() {
               </thead>
               <tbody>
                 {scenarios.map((row) => (
-                  <tr key={row.scenario_id} onClick={() => setSelected(row.scenario_id)}>
-                    <td className="mono">{row.scenario_id}</td>
+                  <tr key={row.scenario_id} className={selected === row.scenario_id ? "selected" : undefined}>
+                    <td className="mono">
+                      <button
+                        type="button"
+                        className="row-select"
+                        aria-pressed={selected === row.scenario_id}
+                        onClick={() => setSelected(row.scenario_id)}
+                      >
+                        {row.scenario_id}
+                      </button>
+                    </td>
                     <td>{row.strategy}</td>
                     <td className="mono">{row.seeds.join(", ")}</td>
                     <td>{row.tags.join(", ")}</td>

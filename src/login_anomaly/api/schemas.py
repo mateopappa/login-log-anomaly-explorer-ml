@@ -42,6 +42,12 @@ class SocSummary(BaseModel):
     live: dict[str, Any] | None
     investigator: dict[str, Any]
     services: dict[str, str]
+    active_dataset_id: str | None = None
+    active_seed: int | None = None
+    events_total: int = 0
+    cases_by_kind: dict[str, int] = Field(default_factory=dict)
+    scope: Literal["sites", "latest", "live", "all"] = "latest"
+    live_dataset_id: str | None = None
 
 
 class LiveControlRequest(BaseModel):

@@ -55,7 +55,16 @@ def test_evaluate_completed_replay_produces_quality_and_operational_metrics() ->
     assert result.rules_metrics.enabled is True
     assert result.rules_metrics.f1 > 0
     assert result.ml_metrics.enabled is True
-    assert result.ml_metrics.flagged_events > 0
+    assert result.ml_metrics.flagged_events == 1500
+    assert len(service._ml_signals) < len(service._ml_flagged_ids)
+
+    scored = evaluate_live_replay(
+        service,
+        investigated=[("benign", [service._source.released_events()[0].event_id])],  # type: ignore[union-attr]
+        awaiting=4,
+    )
+    assert scored.case_quality.awaiting == 4
+    assert scored.case_quality.correct + scored.case_quality.incorrect + scored.case_quality.inconclusive == 1
 
     assert result.operational_counts["released"] == 1500
     assert result.operational_counts["processed"] == 1500

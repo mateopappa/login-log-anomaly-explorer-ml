@@ -23,6 +23,11 @@ class StreamEnvelope:
     topic: str
     produced_at_utc: datetime
     event: AuthEvent
+    # Generator provenance so a finished publish can be scored later. Not labels.
+    seed: int | None = None
+    n_events: int | None = None
+    n_accounts: int | None = None
+    duration_hours: int | None = None
 
     def to_json_bytes(self) -> bytes:
         return json.dumps(self.to_dict(), separators=(",", ":"), sort_keys=True).encode("utf-8")
@@ -35,6 +40,10 @@ class StreamEnvelope:
             "topic": self.topic,
             "produced_at_utc": self.produced_at_utc.isoformat().replace("+00:00", "Z"),
             "event": event_to_payload(self.event),
+            "seed": self.seed,
+            "n_events": self.n_events,
+            "n_accounts": self.n_accounts,
+            "duration_hours": self.duration_hours,
         }
 
     @classmethod
@@ -51,6 +60,10 @@ class StreamEnvelope:
             region=str(payload["region"]),
             topic=str(payload["topic"]),
             produced_at_utc=produced_at,
+            seed=_optional_int(payload.get("seed")),
+            n_events=_optional_int(payload.get("n_events")),
+            n_accounts=_optional_int(payload.get("n_accounts")),
+            duration_hours=_optional_int(payload.get("duration_hours")),
             event=AuthEvent(
                 event_id=str(event_payload["event_id"]),
                 timestamp_utc=datetime.fromisoformat(
@@ -62,6 +75,12 @@ class StreamEnvelope:
                 country_code=str(event_payload["country_code"]),
             ),
         )
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    return int(value)
 
 
 def event_to_payload(event: AuthEvent) -> dict[str, str]:

@@ -70,11 +70,26 @@ def test_product_and_pipeline_endpoints(client: TestClient) -> None:
     assert demo.status_code == 200
     body = demo.json()
     assert len(body["steps"]) >= 5
-    assert body["steps"][0]["route"] == "/"
+    assert body["steps"][0]["title"] == "Seed"
+    assert "seed=42" in body["steps"][0]["route"]
+    assert body.get("presenter_route") == "/story"
+    assert "prove" not in body["pitch"].lower()
+    assert any(step["id"] == "score" for step in body["steps"])
+
+    story = client.get("/api/v1/product/story")
+    assert story.status_code == 200
+    beats = story.json()["beats"]
+    assert len(beats) >= 8
+    assert beats[0]["id"] == "hook"
+    assert beats[-1]["id"] == "close"
+    assert all(beat["id"] != "prove" for beat in beats)
+    assert all(isinstance(beat.get("say"), str) and len(beat["say"]) > 20 for beat in beats)
+    assert "prove" not in " ".join(beat.get("say", "") for beat in beats).lower()
 
     trust = client.get("/api/v1/product/trust")
     assert trust.status_code == 200
     assert len(trust.json()["bullets"]) >= 4
+    assert all(len(item["text"]) < 80 for item in trust.json()["bullets"])
 
     tenants = client.get("/api/v1/product/tenants")
     assert tenants.status_code == 200
@@ -86,3 +101,8 @@ def test_product_and_pipeline_endpoints(client: TestClient) -> None:
     assert status["broker"]["kind"] == "redpanda"
     assert len(status["topics"]) == 5
     assert "docker compose" in status["how_to_run"][0]
+    assert status["scope"]["persists_cases"] is True
+    assert status["scope"]["runs_ml"] is True
+    assert status["scope"]["runs_rules"] is True
+    assert "kubernetes" not in status["summary"].lower()
+    assert "manifests" in status["k8s_narrative"].lower()

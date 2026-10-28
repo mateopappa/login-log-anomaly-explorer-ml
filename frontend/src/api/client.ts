@@ -7,7 +7,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     const detail = await response.text();
-    throw new Error(detail || `${response.status} ${response.statusText}`);
+    let message = detail;
+    try {
+      const parsed = JSON.parse(detail) as { detail?: unknown };
+      if (typeof parsed.detail === "string") message = parsed.detail;
+    } catch {
+      message = detail;
+    }
+    throw new Error(message || `${response.status} ${response.statusText}`);
   }
   return response.json() as Promise<T>;
 }
@@ -15,6 +22,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export type CaseSummary = {
   case_id: string;
   dataset_id: string;
+  site?: string | null;
   kind: string;
   priority: string;
   status: string;
@@ -76,7 +84,7 @@ export type CaseDetail = {
   priority: string;
   status: string;
   event_ids: string[];
-  signals: unknown[];
+  signals: Array<Record<string, unknown>>;
   associations: unknown[];
   events: Array<{
     event_id: string;
@@ -87,6 +95,34 @@ export type CaseDetail = {
     country_code: string;
   }>;
   investigations: InvestigationRun[];
+};
+
+export type CaseEvaluation = {
+  evaluation_id: string;
+  case_id: string;
+  run_id: string;
+  provider_id: string;
+  mode: string;
+  metrics: {
+    expected_malicious: boolean;
+    expected_verdict: string;
+    actual_verdict: string;
+    verdict_match: string;
+    verdict_correct: boolean | null;
+    malicious_event_ids: string[];
+    malicious_event_count: number;
+    event_count: number;
+    policy: {
+      unsupported_evidence: number;
+      irrelevant_evidence: number;
+      forbidden_access_attempts: number;
+      tool_limit_violations: number;
+      failed_tool_calls: number;
+      steps: number;
+      findings: string[];
+    };
+    note: string;
+  };
 };
 
 export type SocSummary = {
@@ -101,6 +137,12 @@ export type SocSummary = {
     haiku_model: string | null;
   };
   services: Record<string, string>;
+  active_dataset_id?: string | null;
+  active_seed?: number | null;
+  events_total?: number;
+  cases_by_kind?: Record<string, number>;
+  scope?: "sites" | "latest" | "live" | "all";
+  live_dataset_id?: string | null;
 };
 
 export type LiveSummary = {
@@ -118,6 +160,32 @@ export type LiveSummary = {
   scenario?: string | null;
   message?: string;
   state?: string;
+};
+
+export type LiveDetectorScore = {
+  enabled: boolean;
+  precision: number;
+  recall: number;
+  f1: number;
+  confusion: { tp: number; fp: number; fn: number; tn: number } | null;
+};
+
+export type LiveScore = {
+  scenario: string;
+  seed: number;
+  partial: boolean;
+  note: string;
+  total_events: number;
+  rules: LiveDetectorScore;
+  ml: LiveDetectorScore;
+  case_quality: {
+    cases_total: number;
+    correct: number;
+    incorrect: number;
+    inconclusive: number;
+    awaiting: number;
+    unscored: number;
+  };
 };
 
 export type LiveSnapshot = {
@@ -159,14 +227,23 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ seed }),
     }),
-  cases: () => request<CaseSummary[]>("/api/v1/cases"),
+  cases: (opts?: { scope?: "sites" | "latest" | "live" | "all" }) => {
+    const scope = opts?.scope ?? "latest";
+    return request<CaseSummary[]>(`/api/v1/cases?scope=${scope}`);
+  },
   caseDetail: (id: string) => request<CaseDetail>(`/api/v1/cases/${id}`),
   investigate: (caseId: string, provider: "mock" | "haiku", idempotencyKey?: string) =>
     request<InvestigationRun>(`/api/v1/cases/${caseId}/investigations`, {
       method: "POST",
       body: JSON.stringify({ provider, idempotency_key: idempotencyKey }),
     }),
+  evaluateCase: (caseId: string, runId?: string) => {
+    const query = runId ? `?run_id=${encodeURIComponent(runId)}` : "";
+    return request<CaseEvaluation>(`/api/v1/cases/${caseId}/evaluate${query}`, { method: "POST" });
+  },
   liveStatus: () => request<LiveSnapshot>("/api/v1/live/status"),
+  scoreLive: () =>
+    request<{ evaluation_id: string; metrics: LiveScore }>("/api/v1/live/score", { method: "POST" }),
   liveControl: (body: Record<string, unknown>) =>
     request<LiveSnapshot>("/api/v1/live/control", {
       method: "POST",
@@ -185,6 +262,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
   demoPath: () => request<DemoPathResponse>("/api/v1/product/demo-path"),
+  story: () => request<StoryResponse>("/api/v1/product/story"),
   trust: () => request<TrustResponse>("/api/v1/product/trust"),
   tenants: () => request<PipelineStatus["tenants"]>("/api/v1/product/tenants"),
   pipelineStatus: () => request<PipelineStatus>("/api/v1/pipeline/status"),
@@ -203,8 +281,26 @@ export type DemoPathResponse = {
   title: string;
   pitch: string;
   audience: string;
+  presenter_route?: string;
   steps: Array<{ id: string; title: string; route: string; action: string; why: string }>;
   talking_points: string[];
+};
+
+export type StoryBeat = {
+  id: string;
+  kicker: string;
+  headline: string;
+  line: string;
+  blocks: string[];
+  say?: string;
+  cta?: { label: string; route: string };
+};
+
+export type StoryResponse = {
+  title: string;
+  subtitle: string;
+  controls: string;
+  beats: StoryBeat[];
 };
 
 export type TrustResponse = {
@@ -215,6 +311,13 @@ export type TrustResponse = {
 export type PipelineStatus = {
   title: string;
   summary: string;
+  scope?: {
+    persists_cases: boolean;
+    runs_ml: boolean;
+    runs_rules: boolean;
+    exports_metrics: boolean;
+    product_case_path: string;
+  };
   broker: { kind: string; kafka_api: string; console_url: string; protocol: string };
   observability: {
     prometheus_url: string;

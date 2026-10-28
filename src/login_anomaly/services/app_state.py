@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -15,6 +16,8 @@ class AppState:
     live: SimulationService | None = None
     trained_model: Any = field(default=None, repr=False)
     last_seed_dataset_id: str | None = None
+    # One live tick at a time. The shell timer and Advance once share this process.
+    lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def ensure_model(self) -> Any:
         if self.trained_model is None:

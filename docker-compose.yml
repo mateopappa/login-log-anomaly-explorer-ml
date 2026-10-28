@@ -126,9 +126,14 @@ services:
         "12",
         "--events",
         "120",
+        "--metrics-port",
+        "9101",
       ]
     environment:
       KAFKA_BOOTSTRAP: redpanda:9092
+      METRICS_PORT: "9101"
+    ports:
+      - "9101:9101"
     depends_on:
       redpanda-init:
         condition: service_completed_successfully
@@ -151,9 +156,14 @@ services:
     environment:
       KAFKA_BOOTSTRAP: redpanda:9092
       METRICS_PORT: "9100"
+      DATABASE_URL: postgresql+psycopg://login:login@postgres:5432/login_anomaly
     ports:
       - "9100:9100"
     depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
       redpanda-init:
         condition: service_completed_successfully
 
@@ -166,6 +176,7 @@ services:
       - "9090:9090"
     depends_on:
       - pipeline-worker
+      - pipeline-producer
 
   grafana:
     profiles: ["pipeline"]

@@ -59,17 +59,16 @@ def persist_live_snapshot(session: Session, service: SimulationService) -> dict[
             event = _event_from_row(row)
             by_id[event.event_id] = event
     if by_id:
-        # Merge with existing DB events for this dataset (live grows over time).
-        existing = {event.event_id: event for event in repo.load_auth_events(session, dataset_id)}
-        existing.update(by_id)
-        repo.replace_events(session, dataset_id, tuple(existing.values()))
+        repo.insert_events(session, dataset_id, tuple(by_id.values()))
 
     cases_written = 0
     runs_written = 0
-    active = getattr(service, "_active_case_ids", set())
     for record in getattr(service, "_cases", {}).values():
-        status = "open" if record.case.case_id in active else "closed"
-        repo.upsert_case(session, record.case, status=status)
+        # A high rule already closed the case. The queue is what an investigator still has to read.
+        if record.case.priority_hint == "rule_high":
+            continue
+        # The retention window does not close the case. The analyst investigates it from the queue.
+        repo.upsert_case(session, record.case, status="open")
         cases_written += 1
         if record.run is None or record.review is None:
             continue

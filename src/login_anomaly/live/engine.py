@@ -1,4 +1,4 @@
-"""SOC Live service: releases events over time and runs the detectors and agents on what is released.
+"""SOC Live service: releases events over time and runs the detectors on what is released.
 
 Only released events enter ``_buffer``. Every detector, correlation step, and investigation reads
 that buffer, so nothing can see a future event or a label. The service is synchronous: a Streamlit
@@ -29,10 +29,9 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Literal
 
-from login_anomaly.agentic.case_investigator import CaseInvestigationRun, run_case_investigation
-from login_anomaly.agentic.cases import case_input_for
+from login_anomaly.agentic.case_investigator import CaseInvestigationRun
 from login_anomaly.agentic.provider import InvestigatorProvider, MockInvestigatorProvider
-from login_anomaly.agentic.reviewer import InvestigationReview, review_case_investigation
+from login_anomaly.agentic.reviewer import InvestigationReview
 from login_anomaly.correlation import InvestigationCase, MlPositiveSignal, RuleAlertSignal, correlate_signals, make_ml_positive_signal
 from login_anomaly.detection.rules import Alert, Severity, detect
 from login_anomaly.events import AuthEvent
@@ -48,9 +47,6 @@ MAX_RELEASE_PER_TICK = 50
 RETENTION = timedelta(hours=2)
 MAX_BUFFER = 5000
 MAX_HISTORY = 200
-# ML-only cases are mostly false positives on benign traffic, and the mock cannot conclude from them.
-# Investigating each one would only add noise, so the session investigates this many and records the rest.
-MAX_ML_ONLY_INVESTIGATIONS = 25
 EVENT_FEED = 40
 ACTIVITY_FEED = 200
 TRANSITION_LOG = 100
@@ -202,7 +198,7 @@ class SimulationService:
     def summary(self) -> dict[str, Any]:
         elapsed = self._elapsed_now()
         records = list(self._cases.values())
-        open_records = [record for record in records if record.case.case_id in self._active_case_ids]
+        queued = self.cases()
         return {
             "simulation_id": self.simulation_id,
             "state": self._state.value,
@@ -231,9 +227,9 @@ class SimulationService:
             "rule_alerts": self._incidents_created,
             "ml_positive_events": self._ml_positive_total,
             "cases_total": self._cases_opened,
-            "cases_open": len(open_records),
-            "rule_backed_cases_open": sum(record.case.case_kind == "rule_backed" for record in open_records),
-            "ml_only_cases_open": sum(record.case.case_kind == "ml_only" for record in open_records),
+            "cases_open": len(queued),
+            "rule_backed_cases_open": sum(row["kind"] == "rule_backed" for row in queued),
+            "ml_only_cases_open": sum(row["kind"] == "ml_only" for row in queued),
             "investigations_completed": self._investigations,
             "ml_only_not_investigated": sum(record.run is None for record in records),
             "tool_calls": self._tool_calls,
@@ -269,6 +265,7 @@ class SimulationService:
                 "severity": incident.severity.value,
                 "first_seen": incident.first_seen.isoformat(),
                 "events": len(incident.event_ids),
+                "event_ids": list(incident.event_ids),
                 "case_id": case_for_incident.get(incident.incident_id),
             }
             for incident in self._incidents.values()
@@ -281,6 +278,7 @@ class SimulationService:
                 "severity": "untriaged",
                 "first_seen": record.events[0]["timestamp_utc"],
                 "events": len(record.case.event_ids),
+                "event_ids": list(record.case.event_ids),
                 "case_id": record.case.case_id,
             }
             for record in self._cases.values()
@@ -298,13 +296,13 @@ class SimulationService:
         }
         rows = []
         for record in self._cases.values():
+            if record.case.priority_hint == "rule_high":
+                continue
             case_id = record.case.case_id
-            if case_id in self._active_case_ids:
-                status = "open"
-            elif record.case.case_kind == "ml_only" and record.case.event_ids[0] in rule_events:
+            if record.case.case_kind == "ml_only" and case_id not in self._active_case_ids and record.case.event_ids[0] in rule_events:
                 status = "superseded by a rule-backed case"
             else:
-                status = "closed (evidence left the retention window)"
+                status = "open"
             rows.append(
                 {
                     "case_id": case_id,
@@ -341,12 +339,12 @@ class SimulationService:
         self._incidents_created = 0
         self._next_incident = 1
         self._ml_signals: dict[str, MlPositiveSignal] = {}
+        self._ml_flagged_ids: set[str] = set()
         self._ml_positive_total = 0
         self._cases: dict[str, CaseRecord] = {}
         self._active_case_ids: set[str] = set()
         self._cases_opened = 0
         self._investigations = 0
-        self._ml_only_investigations = 0
         self._tool_calls = 0
         self._tool_errors = 0
         self._latency_last_ms = 0.0
@@ -422,7 +420,9 @@ class SimulationService:
         for event_id, prediction in zip(batch_ids, predictions):
             if prediction == 1:
                 self._ml_signals[event_id] = make_ml_positive_signal(self.simulation_id, event_id, MODEL_RUN_ID, DECISION_THRESHOLD)
-                self._ml_positive_total += 1
+                if event_id not in self._ml_flagged_ids:
+                    self._ml_positive_total += 1
+                self._ml_flagged_ids.add(event_id)
 
     def _merge_incidents(self, alerts: list[Alert]) -> None:
         for alert in alerts:
@@ -458,41 +458,39 @@ class SimulationService:
 
     def _investigate(self, cases: tuple[InvestigationCase, ...]) -> None:
         events = tuple(self._buffer)
-        # A standalone ML-only record only matters while its event is retained: it is superseded
-        # when a rule-backed case covers that event, which can only happen inside the window.
-        retained = {event.event_id for event in events}
+        # The detector window is 2 hours. The analyst queue is not: an ML-only case stays
+        # after its event leaves the buffer. It leaves the queue only when a rule case
+        # covers that same event.
+        rule_event_ids = {
+            event_id
+            for case in cases
+            if case.case_kind == "rule_backed"
+            for event_id in case.event_ids
+        }
+        rule_event_ids.update(
+            event_id
+            for record in self._cases.values()
+            if record.case.case_kind == "rule_backed"
+            for event_id in record.case.event_ids
+        )
         self._cases = {
             key: record
             for key, record in self._cases.items()
-            if record.case.case_kind == "rule_backed" or record.case.event_ids[0] in retained
+            if record.case.case_kind == "rule_backed"
+            or (record.case.event_ids and record.case.event_ids[0] not in rule_event_ids)
         }
         active: set[str] = set()
         for case in cases:
             active.add(case.case_id)
             previous = self._cases.get(case.case_id)
             if previous is not None and previous.case.event_ids == case.event_ids:
-                continue  # unchanged evidence: the earlier investigation still stands
+                continue
             if previous is None:
                 self._cases_opened += 1
                 self._log("case_opened", f"{case.case_kind} case {case.case_id} opened with {len(case.event_ids)} events")
             rows = tuple(_observable_row(event) for event in events if event.event_id in set(case.event_ids))
-            if case.case_kind == "ml_only" and self._ml_only_investigations >= MAX_ML_ONLY_INVESTIGATIONS:
-                self._remember(CaseRecord(case, None, None, rows), active)
-                self._log("skipped", f"{case.case_id}: ML-only investigation budget reached; not investigated")
-                continue
-            run = run_case_investigation(events, case_input_for(case, events), self._provider)
-            review = review_case_investigation(run)
-            calls = run.result.tool_calls
-            self._investigations += 1
-            self._tool_calls += len(calls)
-            self._tool_errors += sum(call.status != "ok" for call in calls)
-            if case.case_kind == "ml_only":
-                self._ml_only_investigations += 1
-            self._remember(CaseRecord(case, run, review, rows), active)
-            self._log(
-                "investigation",
-                f"{case.case_id}: {run.result.verdict}, {len(calls)} tool calls ({run.mode}); review {review.quality}",
-            )
+            # Triage only. The analyst starts the investigation from the case dossier.
+            self._remember(CaseRecord(case, None, None, rows), active)
         self._active_case_ids = active
 
     def _remember(self, record: CaseRecord, active: set[str]) -> None:

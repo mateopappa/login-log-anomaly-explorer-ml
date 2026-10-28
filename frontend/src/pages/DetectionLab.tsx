@@ -1,56 +1,48 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { api, type LiveSnapshot } from "../api/client";
+import { LiveRunPanel } from "../components/LiveRunPanel";
+import { SessionFlow } from "../components/SessionFlow";
 
 const TICK_MS = 1000;
 
 export function DetectionLab() {
+  const [searchParams] = useSearchParams();
   const [snap, setSnap] = useState<LiveSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [auto, setAuto] = useState(false);
   const [mode, setMode] = useState<"replay" | "continuous">("replay");
   const [scenario, setScenario] = useState("Mixed campaigns");
-  const [seed, setSeed] = useState(42);
-  const [rate, setRate] = useState(8);
-  const timer = useRef<number | null>(null);
+  const [seed, setSeed] = useState(() => {
+    const raw = searchParams.get("seed");
+    const parsed = raw == null ? Number.NaN : Number(raw);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 42;
+  });
+  const [rate, setRate] = useState(() => {
+    const raw = Number(searchParams.get("rate"));
+    return Number.isFinite(raw) ? Math.min(50, Math.max(1, raw)) : 8;
+  });
+  const autoStarted = useRef(false);
 
   const apply = useCallback((data: LiveSnapshot) => {
     setSnap(data);
-    if (data.state === "completed" || data.state === "idle" || data.state === "error") {
-      setAuto(false);
-    }
   }, []);
 
   async function refresh() {
     apply(await api.liveStatus());
   }
 
+  // Poll snapshot for UI; Layout owns advance ticks while state === running.
   useEffect(() => {
     void refresh().catch((err) => setError(err instanceof Error ? err.message : String(err)));
-    return () => {
-      if (timer.current != null) window.clearInterval(timer.current);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (timer.current != null) {
-      window.clearInterval(timer.current);
-      timer.current = null;
-    }
-    if (!auto) return;
-    timer.current = window.setInterval(() => {
+    const id = window.setInterval(() => {
       void api
-        .liveControl({ action: "advance" })
+        .liveStatus()
         .then(apply)
-        .catch((err) => {
-          setError(err instanceof Error ? err.message : String(err));
-          setAuto(false);
-        });
+        .catch((err) => setError(err instanceof Error ? err.message : String(err)));
     }, TICK_MS);
-    return () => {
-      if (timer.current != null) window.clearInterval(timer.current);
-    };
-  }, [auto, apply]);
+    return () => window.clearInterval(id);
+  }, [apply]);
 
   async function control(action: string, extra: Record<string, unknown> = {}) {
     setBusy(true);
@@ -58,8 +50,6 @@ export function DetectionLab() {
     try {
       const result = await api.liveControl({ action, ...extra });
       apply(result);
-      if (action === "start") setAuto(true);
-      if (action === "pause" || action === "stop" || action === "reset") setAuto(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -67,18 +57,33 @@ export function DetectionLab() {
     }
   }
 
+  useEffect(() => {
+    if (autoStarted.current) return;
+    if (searchParams.get("autostart") !== "1") return;
+    if (snap == null) return;
+    if (snap.active && snap.state === "running") return;
+    autoStarted.current = true;
+    void control("start", {
+      mode,
+      seed,
+      scenario: mode === "replay" ? scenario : undefined,
+      events_per_second: rate,
+      enable_rules: true,
+      enable_ml: true,
+    });
+  }, [searchParams, snap, mode, seed, scenario, rate]);
+
   const summary = snap?.summary;
   const running = snap?.state === "running";
   const scenarios = snap?.scenarios?.length ? snap.scenarios : ["Mixed campaigns"];
 
   return (
     <div className="stack">
-      <header className="page-header">
-        <h1>Detection Lab · SOC Live</h1>
-        <p>
-          Synthetic events are released over simulated time. The engine is synchronous: this page auto-advances while
-          running so you can watch detections and cases appear.
-        </p>
+      <header className="page-header hero-header">
+        <div>
+          <p className="eyebrow">Live</p>
+          <h1>Live session</h1>
+        </div>
       </header>
 
       {error && <div className="error">{error}</div>}
@@ -105,6 +110,11 @@ export function DetectionLab() {
               </select>
             </label>
           )}
+          {mode === "replay" && scenario === "Boundary lab" && (
+            <p className="muted" style={{ margin: 0 }}>
+              Campaigns sit just outside the rule thresholds, with benign look-alikes. The queue is what the rule did not close.
+            </p>
+          )}
           <label className="muted">
             Seed{" "}
             <input
@@ -125,7 +135,10 @@ export function DetectionLab() {
               max={50}
               style={{ width: "4rem" }}
               disabled={busy || running}
-              onChange={(e) => setRate(Number(e.target.value))}
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                if (Number.isFinite(next)) setRate(Math.min(50, Math.max(1, next)));
+              }}
             />{" "}
             evt/s
           </label>
@@ -160,9 +173,7 @@ export function DetectionLab() {
           <button
             className="btn"
             disabled={busy || snap?.state !== "paused"}
-            onClick={() => {
-              void control("resume").then(() => setAuto(true));
-            }}
+            onClick={() => void control("resume")}
           >
             Resume
           </button>
@@ -172,16 +183,17 @@ export function DetectionLab() {
           <button className="btn" disabled={busy} onClick={() => void control("reset")}>
             Reset
           </button>
-          <button className="btn" disabled={busy} onClick={() => setAuto((value) => !value)}>
-            Auto-advance: {auto ? "on" : "off"}
-          </button>
           <button className="btn" disabled={busy} onClick={() => void refresh()}>
             Refresh
           </button>
         </div>
         <p className="muted" style={{ margin: 0 }}>
           {snap?.message ?? "No live session yet."}
-          {auto ? " · ticking every 1s" : ""}
+          {running
+            ? " · advancing every 1s (keeps going if you leave this tab)"
+            : snap?.state === "paused"
+              ? " · paused — Resume to keep advancing"
+              : ""}
         </p>
       </section>
 
@@ -214,74 +226,29 @@ export function DetectionLab() {
         </div>
       </div>
 
-      <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}>
-        <section className="panel">
-          <h2 style={{ marginTop: 0, fontSize: "1rem" }}>Recent events</h2>
-          {(snap?.recent_events?.length ?? 0) === 0 ? (
-            <p className="muted">No events released yet. Start a session and leave auto-advance on.</p>
-          ) : (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Time</th>
-                    <th>Account</th>
-                    <th>Outcome</th>
-                    <th>Country</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {snap!.recent_events.slice(0, 20).map((event) => (
-                    <tr key={String(event.event_id)}>
-                      <td className="mono">{String(event.timestamp_utc).slice(11, 19)}</td>
-                      <td className="mono">{String(event.account_id)}</td>
-                      <td>{String(event.outcome)}</td>
-                      <td>{String(event.country_code)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
+      {snap?.active && <LiveRunPanel />}
 
-        <section className="panel">
-          <h2 style={{ marginTop: 0, fontSize: "1rem" }}>Alerts</h2>
-          {(snap?.alerts?.length ?? 0) === 0 ? (
-            <p className="muted">No alerts yet.</p>
-          ) : (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Method</th>
-                    <th>Rule</th>
-                    <th>Severity</th>
-                    <th>Events</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {snap!.alerts.slice(0, 15).map((alert) => (
-                    <tr key={String(alert.alert_id)}>
-                      <td>{String(alert.method)}</td>
-                      <td className="mono">{String(alert.rule)}</td>
-                      <td>
-                        <span className={`badge ${String(alert.severity)}`}>{String(alert.severity)}</span>
-                      </td>
-                      <td>{String(alert.events)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-      </div>
+      <SessionFlow
+        events={snap?.recent_events ?? []}
+        alerts={snap?.alerts ?? []}
+        running={running}
+      />
 
       <section className="panel">
-        <h2 style={{ marginTop: 0, fontSize: "1rem" }}>Live cases</h2>
+        <div className="section-head">
+          <div>
+            <p className="eyebrow">This session only</p>
+            <h2 style={{ margin: 0, fontSize: "1rem" }}>Triage queue</h2>
+          </div>
+          <Link className="btn" to="/cases?scope=live">
+            Cases queue
+          </Link>
+        </div>
+        <p className="muted" style={{ margin: 0 }}>
+          Detectors file the case and a priority. Nothing is investigated until you open the dossier.
+        </p>
         {(snap?.cases?.length ?? 0) === 0 ? (
-          <div className="empty">Cases appear after detectors fire on released events.</div>
+          <div className="empty">Flagged cases land here after detectors fire. Open one to investigate.</div>
         ) : (
           <div className="table-wrap">
             <table>
@@ -293,21 +260,34 @@ export function DetectionLab() {
                   <th>Verdict</th>
                   <th>Review</th>
                   <th>Status</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
-                {snap!.cases.map((row) => (
-                  <tr key={String(row.case_id)}>
-                    <td className="mono">{String(row.case_id).slice(0, 18)}…</td>
-                    <td>{String(row.kind)}</td>
-                    <td>{String(row.priority)}</td>
-                    <td>
-                      <span className={`badge ${String(row.verdict)}`}>{String(row.verdict)}</span>
-                    </td>
-                    <td>{String(row.review)}</td>
-                    <td>{String(row.status)}</td>
-                  </tr>
-                ))}
+                {snap!.cases.map((row) => {
+                  const id = String(row.case_id);
+                  return (
+                    <tr key={id}>
+                      <td className="mono">
+                        <Link to={`/cases/${encodeURIComponent(id)}`}>{id.slice(0, 18)}…</Link>
+                      </td>
+                      <td>{String(row.kind)}</td>
+                      <td>{String(row.priority)}</td>
+                      <td>
+                        <span className={`badge ${row.verdict === "not investigated" ? "inconclusive" : String(row.verdict)}`}>
+                          {row.verdict === "not investigated" ? "awaiting" : String(row.verdict)}
+                        </span>
+                      </td>
+                      <td>{row.review === "not reviewed" ? "—" : String(row.review)}</td>
+                      <td>{String(row.status)}</td>
+                      <td>
+                        <Link className="btn" to={`/cases/${encodeURIComponent(id)}`}>
+                          Investigate
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

@@ -65,5 +65,27 @@ def test_idle_snapshot_and_replay_advance(client: TestClient) -> None:
     assert snap["summary"]["released"] >= 1
     assert isinstance(snap["recent_events"], list)
     assert len(snap["recent_events"]) >= 1
+    event = snap["recent_events"][0]
+    assert {"event_id", "source_ip", "country_code", "outcome", "account_id"} <= set(event)
     assert isinstance(snap["cases"], list)
     assert isinstance(snap["alerts"], list)
+
+    # Keep advancing until a rule alert appears so the session-flow UI can join event_ids.
+    for _ in range(40):
+        time.sleep(0.15)
+        snap = client.post("/api/v1/live/control", json={"action": "advance"}).json()
+        if snap["alerts"]:
+            break
+    if snap["alerts"]:
+        assert "event_ids" in snap["alerts"][0]
+        assert isinstance(snap["alerts"][0]["event_ids"], list)
+
+    scored = client.post("/api/v1/live/score")
+    assert scored.status_code == 200, scored.text
+    metrics = scored.json()["metrics"]
+    assert metrics["partial"] is True
+    assert metrics["rules"]["enabled"] is True
+    assert metrics["ml"]["enabled"] is True
+    assert metrics["case_quality"]["awaiting"] >= 0
+    assert "Ground truth was rebuilt offline" in metrics["note"]
+

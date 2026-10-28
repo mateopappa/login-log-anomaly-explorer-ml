@@ -1,4 +1,4 @@
-"""Product storytelling contracts: demo path, trust model, multi-site catalog."""
+"""Product storytelling contracts: demo path, trust model, multi-site catalog, presenter beats."""
 
 from __future__ import annotations
 
@@ -14,55 +14,141 @@ router = APIRouter(tags=["product"])
 @router.get("/product/demo-path")
 def demo_path() -> dict[str, Any]:
     return {
-        "title": "Demo path — Login Log Anomaly Explorer",
-        "pitch": (
-            "Synthetic multi-site authentication telemetry → independent detectors → "
-            "cases → bounded investigator agent → deterministic review → offline evaluation."
-        ),
-        "audience": "Proofpoint bootcamp / security engineering interview demo",
+        "title": "Walkthrough",
+        "pitch": "Seed traffic → raise alerts → open a case → investigate → score it.",
+        "audience": "Proofpoint bootcamp / security engineering demo",
+        "presenter_route": "/story",
         "steps": [
             {
                 "id": "lab",
-                "title": "1. Build the haystack",
-                "route": "/",
-                "action": "Seed demo dataset (pick a seed)",
-                "why": "Reproducible synthetic world. Same seed → same events. Ground truth exists only for later evaluation.",
+                "title": "Seed",
+                "route": "/?seed=42&autoseed=1",
+                "action": "Load dataset",
+                "why": "Fixed seed, repeatable volume.",
             },
             {
                 "id": "streams",
-                "title": "2. Watch multi-site streams",
+                "title": "Ingest",
                 "route": "/pipeline",
-                "action": "Open Pipeline & Observability",
-                "why": "Five tenants publish AuthEvents through a Kafka-compatible broker (Redpanda). A worker consumes, detects, and persists.",
+                "action": "5 site feeds",
+                "why": "Each finished publish becomes cases.",
             },
             {
                 "id": "live",
-                "title": "3. SOC Live triage",
-                "route": "/detection",
-                "action": "Start replay with auto-advance",
-                "why": "Operational console: release → detect → case → investigate in simulated time.",
+                "title": "Triage",
+                "route": "/detection?seed=42&autostart=1&rate=8",
+                "action": "SOC Live",
+                "why": "Release events, watch alerts.",
             },
             {
                 "id": "investigate",
-                "title": "4. Investigate with an agent",
+                "title": "Investigate",
                 "route": "/cases",
-                "action": "Open a case → Investigate (mock), then Haiku if configured",
-                "why": "Read-only tools, budgets, structured verdict. Python enforces policy; the model cannot remediate or read labels.",
+                "action": "Open case",
+                "why": "Read-only tools only.",
             },
             {
-                "id": "evaluate",
-                "title": "5. Prove it with metrics",
+                "id": "score",
+                "title": "Score",
                 "route": "/evaluation",
-                "action": "Run benchmark mock (and Haiku if key present)",
-                "why": "Precision/recall/F1 for detectors; investigation quality offline. No unverified claims.",
+                "action": "Run benchmark",
+                "why": "Precision, recall, F1.",
+            },
+            {
+                "id": "adversarial",
+                "title": "Red team",
+                "route": "/threat-lab",
+                "action": "One scenario",
+                "why": "Offline attack catalog.",
             },
         ],
         "talking_points": [
-            "Rules and ML stay independent — no hybrid score aggregation.",
-            "Investigator is an agent loop with allowlisted tools, not a free-form chatbot.",
-            "Mock baseline is labeled honestly; Claude Haiku is optional and explicit.",
-            "Ground truth never enters runtime detectors or investigation tools.",
-            "Event-driven path uses a real broker in Docker; Kubernetes is the production narrative, not a required demo dependency.",
+            "Five sites, seed, and Live write the same case queue.",
+            "Rules and ML stay separate — no blended score.",
+            "Investigator is tool-gated, not free chat.",
+            "Mock is explicit; Haiku is optional when a key is set.",
+            "Labels never hit detectors or tools.",
+        ],
+    }
+
+
+@router.get("/product/story")
+def story_beats() -> dict[str, Any]:
+    """Presenter beats for /story — on-screen EN, speaker cue ES."""
+    return {
+        "title": "Login Anomaly Explorer",
+        "subtitle": "Synthetic auth telemetry into a triage loop you can audit",
+        "controls": "← → or space · Esc exits",
+        "beats": [
+            {
+                "id": "hook",
+                "kicker": "Ops reality",
+                "headline": "Login noise eats the queue.",
+                "line": "Spraying, travel hops, and shared NATs look alike until you correlate them.",
+                "blocks": ["Auth logs", "False positives", "Missed campaigns"],
+                "say": "Arrancamos desde el dolor del SOC: la cola se llena de logins raros y la mayoría son ruido.",
+                "cta": {"label": "Open console", "route": "/"},
+            },
+            {
+                "id": "contract",
+                "kicker": "Trust boundary",
+                "headline": "Detectors only see observables.",
+                "line": "Ground-truth labels stay offline for scoring — never in the runtime path.",
+                "blocks": ["AuthEvent", "GT offline", "Import guards"],
+                "say": "Contrato duro: reglas y ML solo ven el evento observable. Las etiquetas no entran al runtime.",
+            },
+            {
+                "id": "detectors",
+                "kicker": "Detection",
+                "headline": "Signature rules next to an ML baseline.",
+                "line": "No hybrid fusion. Cases join on exact event ids.",
+                "blocks": ["Bruteforce", "Password spray", "Impossible travel", "ML flag"],
+                "say": "Dos detectores independientes — firmas y ML. Sin score mezclado. El case junta por event id.",
+            },
+            {
+                "id": "agent",
+                "kicker": "Investigation",
+                "headline": "Tool-gated investigator.",
+                "line": "Allowlisted reads, hard budgets, deterministic review. Mock first; Haiku if configured.",
+                "blocks": ["Tool calls", "Budget", "Verdict", "Reviewer"],
+                "say": "El investigador no es chat libre: tools de solo lectura, presupuesto, y un reviewer determinístico.",
+            },
+            {
+                "id": "product",
+                "kicker": "Console",
+                "headline": "Same loop an analyst would run.",
+                "line": "Site traffic, or a seed, becomes a case you can open and score.",
+                "blocks": ["Console", "SOC Live", "Cases", "Scores"],
+                "say": "Mismo loop de triage: cargás el dataset, soltás tráfico en Live, abrís el case, scorés contra labels.",
+                "cta": {"label": "Load seed 42", "route": "/?seed=42&autoseed=1"},
+            },
+            {
+                "id": "pipeline",
+                "kicker": "Multi-site ingest",
+                "headline": "Five tenants on one Kafka API.",
+                "line": "Five sites publish in parallel. Rules and ML write cases into the same queue.",
+                "blocks": ["Producers", "Redpanda", "Rules + ML", "Cases"],
+                "say": "Multi-sede: cinco tenants a Redpanda, reglas y ML, y los cases entran a la misma cola del SOC.",
+                "cta": {"label": "Open pipeline", "route": "/pipeline"},
+            },
+            {
+                "id": "score",
+                "kicker": "Measurement",
+                "headline": "Numbers before claims.",
+                "line": "Held-out benchmark plus per-case scoring against rebuilt ground truth.",
+                "blocks": ["Precision", "Recall", "F1", "Case vs GT"],
+                "say": "Cerramos con métricas: precision/recall/F1 en held-out, y score por case contra ground truth.",
+                "cta": {"label": "Open scores", "route": "/evaluation"},
+            },
+            {
+                "id": "close",
+                "kicker": "Baseline",
+                "headline": "Same seed. Same world. Clear limits.",
+                "line": "No remediation tools. Mock is not an LLM. Labels stay offline.",
+                "blocks": ["Synthetic data", "Isolated GT", "Separate detectors", "Gated agent"],
+                "say": "Demo reproducible: mismo seed, mismos límites. Sin remediación. Mock ≠ Haiku.",
+                "cta": {"label": "Open console", "route": "/?seed=42&autoseed=1"},
+            },
         ],
     }
 
@@ -70,28 +156,14 @@ def demo_path() -> dict[str, Any]:
 @router.get("/product/trust")
 def trust_model() -> dict[str, Any]:
     return {
-        "title": "Trust & evaluation model",
+        "title": "Guardrails",
         "bullets": [
-            {
-                "title": "Synthetic by design",
-                "text": "All login traffic is generated. IPs are documentation/private ranges so data cannot be mistaken for production.",
-            },
-            {
-                "title": "Ground-truth isolation",
-                "text": "Labels live only in simulation/evaluation packages. AST tests block runtime imports of ground truth.",
-            },
-            {
-                "title": "Agent containment",
-                "text": "Tools are read-only and allowlisted. Forbidden tools (remediation, get_ground_truth) are policy violations.",
-            },
-            {
-                "title": "Independent detectors",
-                "text": "Rules and ML produce separate signals; correlation uses exact event ids only.",
-            },
-            {
-                "title": "Honest baselines",
-                "text": "Mock investigator is deterministic and labeled. LLM runs show model id, tokens, and estimated cost when available.",
-            },
+            {"title": "Synthetic traffic", "text": "Generated auth only."},
+            {"title": "Labels offline", "text": "GT never in runtime."},
+            {"title": "Gated tools", "text": "Read-only investigator."},
+            {"title": "Separate detectors", "text": "Rules and ML unfused."},
+            {"title": "Two paths", "text": "Cases via seed/Live; pipeline = metrics."},
+            {"title": "Named baselines", "text": "Mock ≠ Haiku."},
         ],
     }
 

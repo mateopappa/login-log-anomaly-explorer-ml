@@ -20,36 +20,73 @@ def summary(
     state: AppState = Depends(app_state_dep),
     settings: Settings = Depends(settings_dep),
 ) -> SocSummary:
-    cases = repo.list_cases(session, limit=20)
+    sites = repo.latest_site_datasets(session)
+    site_ids = [row.id for row in sites]
+    dataset = None if site_ids else repo.latest_batch_dataset(session)
+    dataset_id = dataset.id if dataset is not None else None
     recent = []
-    for case in cases:
-        latest = case.runs[-1] if case.runs else None
-        recent.append(
-            {
-                "case_id": case.id,
-                "kind": case.case_kind,
-                "priority": case.priority_hint,
-                "status": case.status,
-                "events": len(case.event_ids_json or []),
-                "verdict": latest.result.verdict if latest and latest.result else None,
-                "mode": latest.mode if latest else None,
-                "review": latest.review.quality if latest and latest.review else None,
-            }
-        )
-    live_payload = None
-    if state.live is not None:
-        live_payload = state.live.summary()
+    open_rows = (
+        repo.list_cases(session, limit=8, dataset_ids=site_ids, status="open")
+        if site_ids
+        else repo.list_cases(session, limit=8, dataset_id=dataset_id, status="open")
+        if dataset_id
+        else []
+    )
+    if open_rows:
+        for case in open_rows:
+            latest = case.runs[-1] if case.runs else None
+            recent.append(
+                {
+                    "case_id": case.id,
+                    "kind": case.case_kind,
+                    "priority": case.priority_hint,
+                    "status": case.status,
+                    "events": len(case.event_ids_json or []),
+                    "verdict": latest.result.verdict if latest and latest.result else None,
+                    "mode": latest.mode if latest else None,
+                    "review": latest.review.quality if latest and latest.review else None,
+                }
+            )
+    with state.lock:
+        live_payload = state.live.summary() if state.live is not None else None
+        live_id = state.live.simulation_id if state.live is not None else None
+        live_state = state.live.state.value if state.live is not None else "idle"
+    if site_ids:
+        cases_open = sum(repo.count_cases(session, item, status="open") for item in site_ids)
+        cases_total = sum(repo.count_cases(session, item) for item in site_ids)
+        events_total = sum(repo.count_events(session, item) for item in site_ids)
+        by_kind: dict[str, int] = {}
+        for item in site_ids:
+            for kind, count in repo.cases_by_kind(session, item).items():
+                by_kind[kind] = by_kind.get(kind, 0) + count
+        summary_scope = "sites"
+        active_id = None
+        active_seed = None
+    else:
+        cases_open = repo.count_cases(session, dataset_id, status="open") if dataset_id else 0
+        cases_total = repo.count_cases(session, dataset_id) if dataset_id else 0
+        events_total = repo.count_events(session, dataset_id) if dataset_id else 0
+        by_kind = repo.cases_by_kind(session, dataset_id) if dataset_id else {}
+        summary_scope = "latest"
+        active_id = dataset_id
+        active_seed = dataset.seed if dataset is not None else None
     return SocSummary(
-        cases_open=sum(1 for case in cases if case.status == "open"),
-        cases_total=len(cases),
+        cases_open=cases_open,
+        cases_total=cases_total,
         recent_cases=recent,
         live=live_payload,
         investigator=provider_status(settings),
         services={
             "api": "ok",
             "database": "ok",
-            "live": "running" if state.live and state.live.state.value == "running" else "idle",
+            "live": "running" if live_state == "running" else "idle",
         },
+        active_dataset_id=active_id,
+        active_seed=active_seed,
+        events_total=events_total,
+        cases_by_kind=by_kind,
+        scope=summary_scope,
+        live_dataset_id=live_id,
     )
 
 
@@ -76,7 +113,7 @@ def data_explainer() -> dict[str, object]:
         "seed_demo_defaults": {
             "duration_hours": 72,
             "n_accounts": 50,
-            "n_events": 1200,
+            "n_events": 1800,
             "bruteforce_campaigns": 2,
             "password_spraying_campaigns": 1,
             "impossible_travel_campaigns": 2,
@@ -108,8 +145,8 @@ def data_explainer() -> dict[str, object]:
             "generate(seed, plan) → observable events",
             "rules + ML detectors (independent)",
             "exact event-id correlation → cases",
-            "bounded investigator (mock or Claude Haiku) + deterministic reviewer",
-            "evaluation may join ground truth only after the run",
+            "tool-gated investigator (mock or Claude Haiku) + deterministic reviewer",
+            "labels may join only after the run for scoring",
         ],
         "live_vs_seed": {
             "seed_demo": "Batch snapshot persisted to the database for the Cases workbench.",

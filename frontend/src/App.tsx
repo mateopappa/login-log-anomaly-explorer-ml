@@ -6,12 +6,14 @@ import { DetectionLab } from "./pages/DetectionLab";
 import { EvaluationLab } from "./pages/EvaluationLab";
 import { PipelinePage } from "./pages/PipelinePage";
 import { SocConsole } from "./pages/SocConsole";
+import { StoryPage } from "./pages/StoryPage";
 import { ThreatLab } from "./pages/ThreatLab";
 
 export default function App() {
   return (
     <BrowserRouter>
       <Routes>
+        <Route path="story" element={<StoryPage />} />
         <Route element={<Layout />}>
           <Route index element={<SocConsole />} />
           <Route path="cases" element={<CasesPage />} />
