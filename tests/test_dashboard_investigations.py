@@ -158,7 +158,7 @@ def test_bad_budget_raises_once_instead_of_failing_every_alert(events, alerts) -
         investigate_alerts(events.events, alerts, max_tool_calls=0)
 
 
-def test_live_case_detail_exposes_budget_errors_and_review() -> None:
+def test_live_case_detail_is_triage_until_someone_investigates() -> None:
     from login_anomaly.dashboard.view import live_case_detail
     from login_anomaly.live.engine import LiveConfig, SimulationService, SimulationState
 
@@ -182,9 +182,13 @@ def test_live_case_detail_exposes_budget_errors_and_review() -> None:
     while service.state is SimulationState.RUNNING:
         clock.now += 1.0
         service.advance()
-    case_id = next(row["case_id"] for row in service.cases() if row["kind"] == "rule_backed")
+    case_id = next(
+        record.case.case_id
+        for record in service._cases.values()
+        if record.case.case_kind == "rule_backed"
+    )
     detail = live_case_detail(service, case_id)
-    assert detail is not None and detail["mode"] == "mock"
-    assert detail["review"]["case_id"] == case_id and "uncertainty" in detail
+    assert detail is not None and "mode" not in detail
+    assert "Not investigated" in detail["note"]
     assert all("event_id" in row for row in detail["events"])
     assert live_case_detail(service, "case-does-not-exist") is None
