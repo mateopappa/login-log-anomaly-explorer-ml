@@ -2,11 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, type StoryResponse } from "../api/client";
 
-export function StoryPage() {
+export function StoryPage({ onClose }: { onClose?: () => void }) {
   const [story, setStory] = useState<StoryResponse | null>(null);
   const [index, setIndex] = useState(0);
+  const [notes, setNotes] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
+  const close = onClose ?? (() => navigate("/"));
 
   useEffect(() => {
     void api
@@ -34,8 +36,11 @@ export function StoryPage() {
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        navigate("/");
+        close();
         return;
+      }
+      if (event.key === "n" || event.key === "N") {
+        setNotes((open) => !open);
       }
       if (event.key === "ArrowRight" || event.key === " " || event.key === "PageDown") {
         event.preventDefault();
@@ -50,13 +55,13 @@ export function StoryPage() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [go, navigate, beats.length]);
+  }, [go, close, beats.length]);
 
   if (error) return <div className="story-shell"><div className="error">{error}</div></div>;
   if (!story || !beat) return <div className="story-shell"><div className="empty">Loading story…</div></div>;
 
   return (
-    <div className="story-shell" data-beat={beat.id}>
+    <div className={`story-shell ${onClose ? "story-overlay" : ""}`} data-beat={beat.id}>
       <header className="story-top">
         <div>
           <p className="eyebrow">{story.title}</p>
@@ -66,9 +71,9 @@ export function StoryPage() {
         </div>
         <div className="story-top-actions">
           <span className="muted mono">{story.controls}</span>
-          <Link className="btn" to="/">
-            Exit
-          </Link>
+          <button className="btn" type="button" onClick={close}>
+            Board
+          </button>
         </div>
       </header>
 
@@ -83,14 +88,14 @@ export function StoryPage() {
             </span>
           ))}
         </div>
-        {beat.say && (
+        {notes && beat.say && (
           <aside className="story-say" aria-label="Speaker cue">
             <span className="story-say-label">Decí</span>
             <p>{beat.say}</p>
           </aside>
         )}
         {beat.cta && (
-          <Link className="btn primary btn-xl story-cta" to={beat.cta.route}>
+          <Link className="btn primary btn-xl story-cta" to={beat.cta.route} onClick={close}>
             {beat.cta.label}
           </Link>
         )}
@@ -112,9 +117,9 @@ export function StoryPage() {
           ))}
         </div>
         {last ? (
-          <Link className="btn primary btn-lg" to="/?seed=42&autoseed=1">
-            Live demo
-          </Link>
+          <button className="btn primary btn-lg" type="button" onClick={close}>
+            Board
+          </button>
         ) : (
           <button className="btn primary btn-lg" type="button" onClick={() => go(1)}>
             Next

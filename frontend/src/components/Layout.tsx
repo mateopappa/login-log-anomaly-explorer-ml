@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, NavLink, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet, useSearchParams } from "react-router-dom";
 import { api, type LiveSnapshot, type SocSummary } from "../api/client";
+import { StoryPage } from "../pages/StoryPage";
 
 const links = [
   { to: "/", label: "Console", end: true },
@@ -27,6 +28,8 @@ function applyLive(live: LiveSnapshot, openCases?: number): TriageStatus {
 }
 
 export function Layout() {
+  const [params, setParams] = useSearchParams();
+  const present = params.get("present") === "1";
   const [triage, setTriage] = useState<TriageStatus>({ sim: "idle", openCases: 0, live: false });
   const simRef = useRef(triage.sim);
   simRef.current = triage.sim;
@@ -130,9 +133,20 @@ export function Layout() {
               </span>
             )}
             <span className="topbar-divider" aria-hidden />
-            <Link to="/story" className="topbar-action" title="Presenter mode">
+            <button
+              type="button"
+              className="topbar-action"
+              title="Presenter mode"
+              aria-pressed={present}
+              onClick={() => {
+                const next = new URLSearchParams(params);
+                if (present) next.delete("present");
+                else next.set("present", "1");
+                setParams(next);
+              }}
+            >
               Present
-            </Link>
+            </button>
           </div>
         </nav>
       </header>
@@ -140,6 +154,15 @@ export function Layout() {
       <main className="content">
         <Outlet />
       </main>
+      {present && (
+        <StoryPage
+          onClose={() => {
+            const next = new URLSearchParams(params);
+            next.delete("present");
+            setParams(next, { replace: true });
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -40,27 +40,29 @@ def _event_ids_for_score(case: Any, run: Any) -> list[str]:
 def list_cases(
     session: Session = Depends(db_session),
     state: AppState = Depends(app_state_dep),
-    limit: int = Query(default=200, ge=1, le=200),
+    limit: int = Query(default=200, ge=1, le=1000),
     scope: str = Query(default="latest", pattern="^(sites|latest|live|all)$"),
+    dataset_id: str | None = Query(default=None, max_length=128),
 ) -> list[dict[str, Any]]:
-    dataset_id: str | None = None
+    """``dataset_id`` opens one saved replay after that simulation has left memory."""
     dataset_ids: list[str] | None = None
     site_names: dict[str, str] = {}
     status: str | None = None
-    if scope == "sites":
+    pinned = dataset_id
+    if not pinned and scope == "sites":
         sites = repo.latest_site_datasets(session)
         dataset_ids = [row.id for row in sites]
         site_names = {row.id: str((row.config_json or {}).get("display_name") or "") for row in sites}
         if not dataset_ids:
             return []
-    elif scope == "live":
+    elif not pinned and scope == "live":
         with state.lock:
             live = state.live
             dataset_id = live.simulation_id if live is not None else None
         if dataset_id is None:
             return []
         status = "open"
-    elif scope != "all":
+    elif not pinned and scope != "all":
         dataset = repo.latest_batch_dataset(session)
         if dataset is None:
             return []
@@ -72,7 +74,7 @@ def list_cases(
         dataset_ids=dataset_ids,
         status=status,
     )
-    if scope == "live":
+    if scope == "live" and not pinned:
         rows = [case for case in rows if case.priority_hint != "rule_high"]
     out = []
     for case in rows:

@@ -174,3 +174,35 @@ def test_sites_scope_is_latest_publish_and_live_scope_is_open(client: TestClient
     assert client.get("/api/v1/cases/case-this-sim").status_code == 404
     sites_after = client.get("/api/v1/cases", params={"scope": "sites"})
     assert {row["case_id"] for row in sites_after.json()} == {"case-new"}
+
+
+def test_dataset_id_lists_a_saved_replay_without_a_live_sim(client: TestClient) -> None:
+    now = datetime.now(timezone.utc)
+    url = client.app.state.settings.database_url
+    with session_scope(url) as session:
+        repo.upsert_dataset(session, "sim-saved", 42, {"source": "soc_live", "scenario": "Boundary lab"})
+        repo.upsert_dataset(session, "sim-other", 7, {"source": "soc_live", "scenario": "Mixed campaigns"})
+        for case_id, dataset_id, status in (
+            ("case-open-saved", "sim-saved", "open"),
+            ("case-closed-saved", "sim-saved", "closed"),
+            ("case-other", "sim-other", "open"),
+        ):
+            session.add(
+                CaseRow(
+                    id=case_id,
+                    dataset_id=dataset_id,
+                    case_kind="ml_only",
+                    priority_hint="ml_untriaged",
+                    status=status,
+                    event_ids_json=["evt-1"],
+                    signals_json=[],
+                    associations_json=[],
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+
+    listed = client.get("/api/v1/cases", params={"dataset_id": "sim-saved", "limit": 1000})
+    assert listed.status_code == 200
+    assert {row["case_id"] for row in listed.json()} == {"case-open-saved", "case-closed-saved"}
+    assert client.get("/api/v1/cases", params={"scope": "live"}).json() == []
