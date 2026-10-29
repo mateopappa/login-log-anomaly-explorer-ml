@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { api } from "../api/client";
+import { Link } from "react-router-dom";
+import { api, type LiveScore } from "../api/client";
 
 type Metrics = {
   provider_mode?: string;
@@ -9,15 +10,51 @@ type Metrics = {
   case_investigations?: Record<string, number>;
 };
 
+type EvalRow = {
+  evaluation_id: string;
+  kind?: string;
+  seed?: number;
+  config?: { scenario?: string; partial?: boolean; simulation_id?: string; provider?: string };
+  metrics?: LiveScore;
+  created_at?: string;
+};
+
+const SAVED_SCENARIOS = ["Mixed campaigns", "Boundary lab"] as const;
+
+const SAVED_TITLE: Record<(typeof SAVED_SCENARIOS)[number], string> = {
+  "Mixed campaigns": "Common run",
+  "Boundary lab": "Boundary run",
+};
+
+function savedReplays(rows: EvalRow[]): EvalRow[] {
+  const picked: EvalRow[] = [];
+  for (const name of SAVED_SCENARIOS) {
+    const hit = rows.find(
+      (row) =>
+        row.kind === "live_replay" &&
+        row.config?.scenario === name &&
+        row.config.partial !== true &&
+        row.metrics?.partial !== true &&
+        row.metrics?.rules,
+    );
+    if (hit) picked.push(hit);
+  }
+  return picked;
+}
+
+function fmt(value: number): string {
+  return value.toFixed(3);
+}
+
 export function EvaluationLab() {
-  const [rows, setRows] = useState<Array<Record<string, unknown>>>([]);
+  const [rows, setRows] = useState<EvalRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<"mock" | "haiku" | null>(null);
   const [latest, setLatest] = useState<{ evaluation_id: string; metrics: Metrics } | null>(null);
   const [seed, setSeed] = useState(42);
 
   async function refresh() {
-    setRows(await api.evaluations());
+    setRows((await api.evaluations()) as EvalRow[]);
   }
 
   useEffect(() => {
@@ -48,6 +85,82 @@ export function EvaluationLab() {
           <h1>Offline benchmark</h1>
         </div>
       </header>
+      {savedReplays(rows).length > 0 && (
+        <section className="stack">
+          <div className="section-head">
+            <div>
+              <p className="eyebrow">Saved replays</p>
+              <h2 style={{ margin: 0, fontSize: "1rem" }}>Common and boundary</h2>
+            </div>
+          </div>
+          {savedReplays(rows).map((row) => {
+            const score = row.metrics;
+            if (!score) return null;
+            const title = SAVED_TITLE[score.scenario as (typeof SAVED_SCENARIOS)[number]] ?? score.scenario;
+            const datasetId = score.simulation_id ?? row.config?.simulation_id;
+            return (
+              <section className="panel stack" key={row.evaluation_id}>
+                <div className="section-head">
+                  <div>
+                    <p className="eyebrow">{title}</p>
+                    <h2 style={{ margin: 0, fontSize: "1rem" }}>
+                      {score.scenario} · seed {score.seed} · {score.total_events} events
+                    </h2>
+                  </div>
+                  {datasetId && (
+                    <Link className="btn primary" to={`/cases?dataset=${encodeURIComponent(datasetId)}`}>
+                      Open dossiers
+                    </Link>
+                  )}
+                </div>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Detector</th>
+                        <th>Precision</th>
+                        <th>Recall</th>
+                        <th>F1</th>
+                        <th className="num">TP</th>
+                        <th className="num">FP</th>
+                        <th className="num">FN</th>
+                        <th className="num">TN</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(["rules", "ml"] as const).map((key) => {
+                        const detector = score[key];
+                        const cm = detector.confusion;
+                        return (
+                          <tr key={key}>
+                            <td>{key}</td>
+                            <td className="num">{detector.enabled ? fmt(detector.precision) : "—"}</td>
+                            <td className="num">{detector.enabled ? fmt(detector.recall) : "—"}</td>
+                            <td className="num">{detector.enabled ? fmt(detector.f1) : "—"}</td>
+                            <td className="num">{cm?.tp ?? "—"}</td>
+                            <td className="num">{cm?.fp ?? "—"}</td>
+                            <td className="num">{cm?.fn ?? "—"}</td>
+                            <td className="num">{cm?.tn ?? "—"}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="muted" style={{ margin: 0 }}>
+                  Investigations: correct {score.case_quality.correct} · incorrect {score.case_quality.incorrect} ·
+                  inconclusive {score.case_quality.inconclusive} · awaiting {score.case_quality.awaiting}
+                  {score.case_quality.unscored ? ` · unscored ${score.case_quality.unscored}` : ""}
+                </p>
+                <p className="muted mono" style={{ margin: 0 }}>
+                  {row.evaluation_id}
+                  {score.note ? ` · ${score.note}` : ""}
+                </p>
+              </section>
+            );
+          })}
+        </section>
+      )}
       <section className="panel stack">
         <p style={{ margin: 0 }}>
           Scores are <strong>not</strong> the Live session and <strong>not</strong> the Batch seed you
@@ -143,7 +256,7 @@ export function EvaluationLab() {
               <tbody>
                 {rows.map((row) => {
                   const stored = row.metrics as Metrics | undefined;
-                  const openable = Boolean(stored?.rules);
+                  const openable = row.kind !== "live_replay" && Boolean(stored?.rules);
                   const id = String(row.evaluation_id);
                   return (
                     <tr key={id}>
@@ -161,7 +274,7 @@ export function EvaluationLab() {
                         )}
                       </td>
                       <td className="num">{String(row.seed)}</td>
-                      <td>{String((row.config as { provider?: string } | undefined)?.provider ?? row.kind ?? "—")}</td>
+                      <td>{String(row.config?.scenario ?? row.config?.provider ?? row.kind ?? "—")}</td>
                       <td className="mono">{String(row.created_at)}</td>
                     </tr>
                   );

@@ -31,6 +31,7 @@ function isScope(value: string | null): value is Scope {
 
 export function CasesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const dataset = searchParams.get("dataset");
   const requested = searchParams.get("scope");
   const explicit = isScope(requested) ? requested : null;
   const [scope, setScope] = useState<Scope | null>(explicit);
@@ -39,6 +40,7 @@ export function CasesPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (dataset) return;
     if (explicit) {
       setScope(explicit);
       return;
@@ -55,16 +57,16 @@ export function CasesPage() {
     return () => {
       cancelled = true;
     };
-  }, [explicit]);
+  }, [explicit, dataset]);
 
   useEffect(() => {
-    if (!scope) return;
+    if (!dataset && !scope) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
     const load = (quiet: boolean) => {
-      void api
-        .cases({ scope })
+      const query = dataset ? api.cases({ datasetId: dataset }) : api.cases({ scope: scope ?? "latest" });
+      void query
         .then((next) => {
           if (!cancelled) setRows(next);
         })
@@ -76,7 +78,7 @@ export function CasesPage() {
         });
     };
     load(false);
-    if (scope !== "live") return () => {
+    if (dataset || scope !== "live") return () => {
       cancelled = true;
     };
     const id = window.setInterval(() => load(true), 2000);
@@ -84,7 +86,7 @@ export function CasesPage() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [scope]);
+  }, [scope, dataset]);
 
   const queued = [...rows].sort(byTriage);
   const awaiting = queued.filter((row) => !row.verdict).length;
@@ -95,8 +97,10 @@ export function CasesPage() {
         <div>
           <h1>Cases</h1>
           <p className="muted">
-            High-severity rule alerts stay with the detector. This queue is what still needs an investigator. Reset clears this Live run only.
-            {scope === "live" && queued.length > 0 ? ` ${awaiting} awaiting.` : ""}
+            {dataset
+              ? "Saved replay. These dossiers stay after the simulation stops."
+              : "High-severity rule alerts stay with the detector. This queue is what still needs an investigator. Reset clears this Live run only."}
+            {(dataset || scope === "live") && queued.length > 0 ? ` ${awaiting} awaiting.` : ""}
           </p>
         </div>
         <div className="hero-actions scope-toggle" role="group" aria-label="Dataset scope">
@@ -113,18 +117,45 @@ export function CasesPage() {
           ))}
         </div>
       </header>
-      {scope === "live" && <LiveRunPanel />}
+      {dataset && (
+        <section className="panel stack">
+          <div className="grid metrics">
+            <div className="metric">
+              <label>Active</label>
+              <strong>{queued.length}</strong>
+            </div>
+            <div className="metric">
+              <label>Investigated</label>
+              <strong>{queued.length - awaiting}</strong>
+            </div>
+            <div className="metric">
+              <label>To investigate</label>
+              <strong>{awaiting}</strong>
+            </div>
+          </div>
+          <p className="muted" style={{ margin: 0 }}>
+            Metrics for this replay are on <Link to="/evaluation">Scores</Link>.
+          </p>
+        </section>
+      )}
+      {scope === "live" && !dataset && <LiveRunPanel />}
       {error && <div className="error">{error}</div>}
       {loading ? (
         <div className="empty">Loading…</div>
       ) : rows.length === 0 && !error ? (
         <div className="empty">
-          {scope === "live"
+          {dataset
+            ? "No cases stored for this replay."
+            : scope === "live"
             ? "No open cases in this sim."
             : scope === "sites"
               ? "No cases from the latest publish of each site yet."
               : "No cases in this view."}{" "}
-          <Link to="/">Batch and Live</Link> stay on the other toggles.
+          {!dataset && (
+            <>
+              <Link to="/">Batch and Live</Link> stay on the other toggles.
+            </>
+          )}
         </div>
       ) : (
         <div className="table-wrap">

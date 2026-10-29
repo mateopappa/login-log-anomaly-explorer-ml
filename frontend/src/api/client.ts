@@ -171,6 +171,7 @@ export type LiveDetectorScore = {
 };
 
 export type LiveScore = {
+  simulation_id?: string;
   scenario: string;
   seed: number;
   partial: boolean;
@@ -227,9 +228,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ seed }),
     }),
-  cases: (opts?: { scope?: "sites" | "latest" | "live" | "all" }) => {
-    const scope = opts?.scope ?? "latest";
-    return request<CaseSummary[]>(`/api/v1/cases?scope=${scope}`);
+  cases: (opts?: { scope?: "sites" | "latest" | "live" | "all"; datasetId?: string; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (opts?.datasetId) {
+      params.set("dataset_id", opts.datasetId);
+      params.set("limit", String(opts.limit ?? 1000));
+    } else {
+      params.set("scope", opts?.scope ?? "latest");
+      if (opts?.limit) params.set("limit", String(opts.limit));
+    }
+    return request<CaseSummary[]>(`/api/v1/cases?${params}`);
   },
   caseDetail: (id: string) => request<CaseDetail>(`/api/v1/cases/${id}`),
   investigate: (caseId: string, provider: "mock" | "haiku", idempotencyKey?: string) =>
@@ -254,7 +262,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ seed, provider }),
     }),
-  evaluations: () => request<Array<Record<string, unknown>>>("/api/v1/evaluations"),
+  evaluations: (limit = 50) => request<Array<Record<string, unknown>>>(`/api/v1/evaluations?limit=${limit}`),
   threatScenarios: () => request<ThreatScenario[]>("/api/v1/threat-lab/scenarios"),
   threatRun: (body: { scenario_id?: string; proposal?: boolean }) =>
     request<Record<string, unknown>>("/api/v1/threat-lab/runs", {
